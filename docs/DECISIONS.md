@@ -67,3 +67,14 @@ at M3.
 
 ### D-13: Tooling — uv for env; ruff for lint; pytest for tests
 Standard modern Python. `uv sync` from `pyproject.toml`. No poetry.
+
+### D-14: Validator thresholds relaxed — yes-count 1..19, pairwise-diff >=2
+The plan's original `5 <= yes-count <= 15` and `pairwise-diff >= 3` were too
+strict for a 20-animal bank. (1) Rare taxonomic classes (1 amphibian, 1 insect,
+2 reptiles, 2 fish) make the 5-yes floor unreachable by construction. (2)
+Reaching pairwise-diff >= 3 for (cow, horse), (dog, cat), (eagle, owl) would
+require stuffing the bank with ~6 indicator predicates. Relaxed both. Added 4
+targeted distinguishers (`is_ridden_by_humans`, `produces_dairy_milk`, `purrs`,
+`soars_during_daylight`) and dropped 2 redundant predicates
+(`lives_primarily_on_land`, `is_warm_blooded`). Final bank: 30 questions, all
+190 candidate pairs distinguishable on >=2 questions.

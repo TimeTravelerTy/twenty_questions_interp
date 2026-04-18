@@ -14,11 +14,9 @@ build/
 dist/
 *.whl
 
-# Runs (activations + manifests are rebuildable; do not commit)
+# Runs (activations + manifests are rebuildable; do not commit).
+# Scripts are responsible for creating runs/calibration/ and runs/selfchosen/ on demand.
 runs/
-!runs/.gitkeep
-!runs/calibration/.gitkeep
-!runs/selfchosen/.gitkeep
 
 # Notebooks checkpoints
 .ipynb_checkpoints/

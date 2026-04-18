@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M1 — data artifacts (animals, questions, A(c,q)) + feasible-set utility.
+**Current milestone:** M2 — Ready-state decoder smoke test on Gemma 3 1B (local CPU).
 **Last agent:** Claude (Opus 4.7)
-**Last updated:** 2026-04-18
+**Last updated:** 2026-04-18 (after M1 close)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -14,16 +14,17 @@ Do not publish calibration-only results as the headline.
 
 ## Next concrete step
 
-**Prereq:** install `uv` (`brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`), then `uv sync`. Not done in M0 because `uv` wasn't on the machine when bootstrap ran.
+Write `src/twenty_q/prompts.py` (calibration + self-chosen templates;
+calibration is index-based per D-06), `src/twenty_q/hooks.py` (NNsight
+residual-stream capture at the token position immediately before `Ready`,
+**all layers** per D-08), and `src/twenty_q/dialogue.py` (drives a single
+Ready-capture run end-to-end). Target Gemma 3 1B (`google/gemma-3-1b-it`)
+on local CPU. Gemma 3 is gated on HF — user needs `HF_TOKEN` in `.env`.
 
-Then: draft `data/animals.yaml` (20 candidates) with attribute diversity coverage
-(habitat / diet / body plan / size / domesticity / geography). Every pair must
-differ on ≥3 attributes. Schema lives at `src/twenty_q/banks.py` (to be written
-in parallel — see M1.1d in the plan).
-
-After that: `data/questions.yaml` (~28 binary predicates), then `data/answers.csv`,
-then `scripts/validate_answers.py`, then `src/twenty_q/{banks,permutations,manifest}.py`
-with their tests.
+After scaffolding: `scripts/run_calibration.py --n-per-candidate 8`
+(160 runs) and `scripts/run_selfchosen_smoke.py --n 40` produce manifests.
+Then `scripts/decode_ready.py` runs the layer sweep + nearest-centroid /
+logistic-regression / attribute decoders and writes the M2 progress note.
 
 Full plan is at `~/.claude/plans/here-is-a-project-calm-hummingbird.md` and
 `docs/PLAN.md` (scientific).
@@ -33,7 +34,8 @@ Full plan is at `~/.claude/plans/here-is-a-project-calm-hummingbird.md` and
 ## Milestone tracker
 
 - [x] **M0 — Repo bootstrap.** Skeleton, pyproject, docs seeded. See commit history.
-- [ ] **M1 — Data artifacts + feasible-set utility.** In progress.
+- [x] **M1 — Data artifacts + feasible-set utility.** 20 animals × 30 questions × 0/1
+      table; pairwise-distinguishability floor relaxed to 2 (D-14); 13 tests pass.
 - [ ] **M2 — Ready-state decoder smoke test** (Gemma 3 1B, local CPU). 160 calibration
       runs + 40 self-chosen smoke.
 - [ ] **M3 — TSUBAME + Gemma 3 4B, full calibration dataset (~2–4k).**

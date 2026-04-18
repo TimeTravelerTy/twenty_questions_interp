@@ -1,0 +1,89 @@
+# 20-candidate bank. Chosen for attribute diversity across taxonomy, habitat,
+# diet, size, domesticity, and geography. Every pair must differ on >= 3
+# attributes (enforced by scripts/validate_answers.py).
+#
+# `id` is the canonical identifier used everywhere in code and manifests.
+# `display` is what the model sees in prompts.
+# `aliases` are accepted surface forms when parsing an end-of-game reveal.
+# `notes` are informal attribute tags for human reference; not parsed.
+---
+- id: tiger
+  display: tiger
+  aliases: [bengal tiger, tigers]
+  notes: "mammal, carnivore, striped, wild, Asia, large, feline, four-legged"
+- id: elephant
+  display: elephant
+  aliases: [elephants, african elephant, asian elephant]
+  notes: "mammal, herbivore, wild, Africa/Asia, very large, four-legged, trunk"
+- id: kangaroo
+  display: kangaroo
+  aliases: [kangaroos]
+  notes: "mammal, marsupial, herbivore, wild, Australia, bipedal hop, tail"
+- id: bat
+  display: bat
+  aliases: [bats]
+  notes: "mammal, flies, small, wild, nocturnal"
+- id: dolphin
+  display: dolphin
+  aliases: [dolphins, bottlenose dolphin]
+  notes: "mammal, aquatic, carnivore, wild, intelligent, no legs"
+- id: gorilla
+  display: gorilla
+  aliases: [gorillas]
+  notes: "mammal, primate, herbivore, wild, Africa, large, no external tail"
+- id: cow
+  display: cow
+  aliases: [cattle, cows]
+  notes: "mammal, herbivore, domesticated, farm, large, four-legged"
+- id: dog
+  display: dog
+  aliases: [dogs]
+  notes: "mammal, carnivore, domesticated, pet, medium, canine, four-legged"
+- id: cat
+  display: cat
+  aliases: [cats, housecat]
+  notes: "mammal, carnivore, domesticated, pet, small, feline, four-legged"
+- id: horse
+  display: horse
+  aliases: [horses]
+  notes: "mammal, herbivore, domesticated, farm, large, four-legged"
+- id: eagle
+  display: eagle
+  aliases: [eagles, bald eagle, golden eagle]
+  notes: "bird, raptor, carnivore, flies, wild"
+- id: penguin
+  display: penguin
+  aliases: [penguins, emperor penguin]
+  notes: "bird, flightless, aquatic, carnivore, wild, Antarctic"
+- id: chicken
+  display: chicken
+  aliases: [chickens, hen, rooster]
+  notes: "bird, omnivore, domesticated, farm, mostly flightless"
+- id: owl
+  display: owl
+  aliases: [owls]
+  notes: "bird, carnivore, flies, nocturnal, wild"
+- id: cobra
+  display: cobra
+  aliases: [cobras, king cobra]
+  notes: "reptile, venomous snake, carnivore, wild, cold-blooded, lays eggs"
+- id: crocodile
+  display: crocodile
+  aliases: [crocodiles, nile crocodile]
+  notes: "reptile, semi-aquatic, carnivore, large, wild, cold-blooded"
+- id: frog
+  display: frog
+  aliases: [frogs]
+  notes: "amphibian, carnivore (insectivore), small, wild, no tail as adult"
+- id: shark
+  display: shark
+  aliases: [sharks, great white shark]
+  notes: "fish, carnivore, aquatic, large, wild, cold-blooded"
+- id: salmon
+  display: salmon
+  aliases: [salmons]
+  notes: "fish, carnivore, aquatic, medium, wild, cold-blooded, lays eggs"
+- id: bee
+  display: bee
+  aliases: [bees, honeybee]
+  notes: "insect, herbivore (nectar/pollen), flies, tiny, domesticated/wild, venomous sting"

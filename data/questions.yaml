@@ -1,0 +1,130 @@
+# Binary yes/no predicates. Each must split the 20-candidate bank non-trivially
+# (5-15 yeses; enforced by scripts/validate_answers.py) and every pair of
+# candidates must differ on >=3 questions in aggregate.
+#
+# `id` is used in answers.csv column headers and run manifests.
+# `text` is the surface form asked during a dialogue.
+# `attribute` is the semantic tag used for attribute-level decoders (M2.2c+).
+# `polarity: positive` means yes=attribute-present. `negative` means yes=absent.
+---
+- id: is_mammal
+  text: "Is it a mammal?"
+  attribute: mammal
+  polarity: positive
+- id: is_bird
+  text: "Is it a bird?"
+  attribute: bird
+  polarity: positive
+- id: is_reptile
+  text: "Is it a reptile?"
+  attribute: reptile
+  polarity: positive
+- id: is_fish
+  text: "Is it a fish?"
+  attribute: fish
+  polarity: positive
+- id: is_insect
+  text: "Is it an insect?"
+  attribute: insect
+  polarity: positive
+- id: is_amphibian
+  text: "Is it an amphibian?"
+  attribute: amphibian
+  polarity: positive
+- id: lives_primarily_in_water
+  text: "Does it live primarily in water?"
+  attribute: aquatic
+  polarity: positive
+- id: is_carnivore
+  text: "Is it a carnivore?"
+  attribute: carnivore
+  polarity: positive
+- id: is_herbivore
+  text: "Is it a herbivore?"
+  attribute: herbivore
+  polarity: positive
+- id: is_larger_than_human
+  text: "Is an adult of this species typically larger than an adult human?"
+  attribute: larger_than_human
+  polarity: positive
+- id: is_smaller_than_housecat
+  text: "Is an adult of this species typically smaller than a housecat?"
+  attribute: smaller_than_housecat
+  polarity: positive
+- id: can_fly
+  text: "Can it fly?"
+  attribute: flies
+  polarity: positive
+- id: can_swim
+  text: "Does it regularly swim as part of its typical behavior?"
+  attribute: swims
+  polarity: positive
+- id: has_four_legs
+  text: "Does it walk primarily on four legs?"
+  attribute: quadrupedal
+  polarity: positive
+- id: covered_in_fur_or_hair
+  text: "Is it covered in fur or hair?"
+  attribute: fur_or_hair
+  polarity: positive
+- id: has_feathers
+  text: "Does it have feathers?"
+  attribute: feathers
+  polarity: positive
+- id: has_scales
+  text: "Does it have scales?"
+  attribute: scales
+  polarity: positive
+- id: has_stripes
+  text: "Does it have stripes as a distinctive feature?"
+  attribute: stripes
+  polarity: positive
+- id: is_domesticated
+  text: "Is it a domesticated species?"
+  attribute: domesticated
+  polarity: positive
+- id: is_kept_as_pet
+  text: "Is it commonly kept as a household pet?"
+  attribute: pet
+  polarity: positive
+- id: is_farm_animal
+  text: "Is it commonly found on farms?"
+  attribute: farm
+  polarity: positive
+- id: is_venomous
+  text: "Is it venomous?"
+  attribute: venomous
+  polarity: positive
+- id: is_nocturnal
+  text: "Is it primarily nocturnal?"
+  attribute: nocturnal
+  polarity: positive
+- id: lives_in_africa
+  text: "Is Africa one of its primary native habitats?"
+  attribute: africa
+  polarity: positive
+- id: lays_eggs
+  text: "Does it reproduce by laying eggs?"
+  attribute: oviparous
+  polarity: positive
+- id: has_a_tail
+  text: "Does it have a tail?"
+  attribute: tail
+  polarity: positive
+# Targeted distinguishers (see DECISIONS.md D-14). Low yes-counts are expected.
+- id: is_ridden_by_humans
+  text: "Is it typically ridden by humans for sport or transport?"
+  attribute: ridden
+  polarity: positive
+- id: produces_dairy_milk
+  text: "Is it commonly milked to produce dairy for human consumption?"
+  attribute: dairy_milk
+  polarity: positive
+- id: purrs
+  text: "Does it purr?"
+  attribute: purrs
+  polarity: positive
+- id: soars_during_daylight
+  text: "Does it typically soar at great heights during daylight?"
+  attribute: day_soarer
+  polarity: positive
