@@ -1,6 +1,7 @@
 # 20-candidate bank. Chosen for attribute diversity across taxonomy, habitat,
-# diet, size, domesticity, and geography. Every pair must differ on >= 3
-# attributes (enforced by scripts/validate_answers.py).
+# diet, size, domesticity, and geography. Every pair must differ on >= 2
+# attributes (relaxation from the original 3; see DECISIONS.md D-14, enforced
+# by scripts/validate_answers.py).
 #
 # `id` is the canonical identifier used everywhere in code and manifests.
 # `display` is what the model sees in prompts.

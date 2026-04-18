@@ -32,9 +32,19 @@ from twenty_q.readouts import (
 )
 
 
-def load_runs(run_root: Path) -> list[tuple[RunManifest, np.ndarray]]:
-    """Returns (manifest, activations[n_layers+1, hidden_size]) for each run in `run_root`."""
+def load_runs(
+    run_root: Path,
+    model_name: str | None = None,
+    prompt_template_id: str | None = None,
+) -> list[tuple[RunManifest, np.ndarray]]:
+    """Returns (manifest, activations[n_layers+1, hidden_size]) for each run in `run_root`.
+
+    If `model_name` or `prompt_template_id` is given, runs whose manifest does
+    not match are skipped (with a stderr warning). This prevents silently
+    mixing incompatible datasets once M3 adds 4B runs or new prompts.
+    """
     out: list[tuple[RunManifest, np.ndarray]] = []
+    skipped: list[str] = []
     if not run_root.exists():
         return out
     for sub in sorted(run_root.iterdir()):
@@ -43,8 +53,21 @@ def load_runs(run_root: Path) -> list[tuple[RunManifest, np.ndarray]]:
         if not (m_path.exists() and a_path.exists()):
             continue
         manifest = RunManifest.load(m_path)
+        if model_name is not None and manifest.model_name != model_name:
+            skipped.append(f"{sub.name} (model_name={manifest.model_name!r})")
+            continue
+        if prompt_template_id is not None and manifest.prompt_template_id != prompt_template_id:
+            skipped.append(f"{sub.name} (prompt_template_id={manifest.prompt_template_id!r})")
+            continue
         activations = torch.load(a_path, map_location="cpu").numpy()
         out.append((manifest, activations))
+    if skipped:
+        print(f"[load_runs] Skipped {len(skipped)} incompatible run(s) in {run_root}:",
+              file=sys.stderr)
+        for s in skipped[:10]:
+            print(f"  - {s}", file=sys.stderr)
+        if len(skipped) > 10:
+            print(f"  ... and {len(skipped) - 10} more", file=sys.stderr)
     return out
 
 
@@ -52,6 +75,13 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--attr-subset", default="is_mammal,is_bird,is_carnivore,lives_in_africa",
                    help="Comma-separated question ids for binary-attribute sweep.")
+    p.add_argument("--model-name", default=None,
+                   help="Restrict to runs with this model_name. Defaults to the "
+                        "model_name of the first calibration run found.")
+    p.add_argument("--prompt-template-id", default=None,
+                   help="Restrict to runs with this prompt_template_id. Note: "
+                        "calibration and self-chosen use different templates; "
+                        "this filter is applied per-condition independently.")
     return p.parse_args()
 
 
@@ -59,10 +89,29 @@ def main() -> int:
     args = parse_args()
     bank = load_bank()
 
-    cal = load_runs(CALIBRATION_RUNS_DIR)
-    sc = load_runs(SELFCHOSEN_RUNS_DIR)
+    # First pass without filter to auto-detect model_name if the user didn't set one.
+    model_name = args.model_name
+    if model_name is None:
+        probe = load_runs(CALIBRATION_RUNS_DIR)
+        if not probe:
+            print("No calibration runs found; run scripts/run_calibration.py first.",
+                  file=sys.stderr)
+            return 2
+        model_name = probe[0][0].model_name
+        print(f"[decode_ready] Auto-filtering on model_name={model_name!r} "
+              f"(override with --model-name).")
+
+    cal = load_runs(CALIBRATION_RUNS_DIR, model_name=model_name,
+                    prompt_template_id=args.prompt_template_id)
+    sc = load_runs(SELFCHOSEN_RUNS_DIR, model_name=model_name,
+                   prompt_template_id=args.prompt_template_id)
     if not cal:
-        print("No calibration runs found; run scripts/run_calibration.py first.", file=sys.stderr)
+        print("No calibration runs matched the model_name/prompt filter.", file=sys.stderr)
+        return 2
+    # Sanity: all retained runs must agree on hidden_size.
+    hidden_sizes = {m.hidden_size for m, _ in cal + sc if m.hidden_size is not None}
+    if len(hidden_sizes) > 1:
+        print(f"[decode_ready] Mixed hidden_sizes {hidden_sizes}; aborting.", file=sys.stderr)
         return 2
 
     cal_secrets = [m.secret_canonical_id for m, _ in cal]
@@ -81,6 +130,10 @@ def main() -> int:
     attr_ids = [x.strip() for x in args.attr_subset.split(",") if x.strip()]
 
     report = {
+        "filter": {
+            "model_name": model_name,
+            "prompt_template_id": args.prompt_template_id,
+        },
         "n_calibration_runs": len(cal),
         "n_selfchosen_runs": len(sc),
         "class_ids": class_ids,
@@ -106,7 +159,10 @@ def main() -> int:
         if sc_X_all is not None:
             dec = fit_nearest_centroid(X_cal, cal_secrets, class_ids)
             sc_preds = dec.predict(sc_X_all[:, layer, :])
-            matched = [(m.reveal_canonical_id, p) for (m, _), p in zip(sc, sc_preds)]
+            matched = [
+                (m.reveal_canonical_id, p)
+                for (m, _), p in zip(sc, sc_preds, strict=True)
+            ]
             with_reveal = [(r, p) for r, p in matched if r is not None]
             if with_reveal:
                 sc_agreement = sum(1 for r, p in with_reveal if r == p) / len(with_reveal)
@@ -124,7 +180,11 @@ def main() -> int:
         attr_cells = " | ".join(f"{attr_accs[q][0]:.2f}" for q in attr_ids)
         sc_cell = f"{sc_agreement:.2f}" if sc_agreement is not None else "n/a"
         lines.append(f"| {layer} | {nc_acc:.2f} | {lr_acc:.2f} | {attr_cells} | {sc_cell} |")
-        print(f"  layer {layer:2d}  NC={nc_acc:.2f}  LR={lr_acc:.2f}  attrs={ {k: f'{v[0]:.2f}' for k, v in attr_accs.items()} }  SC={sc_cell}")
+        attr_print = {k: f"{v[0]:.2f}" for k, v in attr_accs.items()}
+        print(
+            f"  layer {layer:2d}  NC={nc_acc:.2f}  LR={lr_acc:.2f}  "
+            f"attrs={attr_print}  SC={sc_cell}"
+        )
 
     # Persist machine-readable report + markdown table.
     report_path = REPO_ROOT / "runs" / "m2_report.json"

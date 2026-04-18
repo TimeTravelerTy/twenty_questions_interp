@@ -18,8 +18,12 @@ hidden size 1152.
 | Any binary attribute decoder at some layer | > 70% | **0.89 `lives_in_africa` (L17); 0.84 `is_bird`; 0.78 `is_carnivore`; 0.74 `is_mammal`** | ✅ |
 
 Infrastructure is proven. The stricter NC-LOO criterion missed — see the
-"Candidate identity needs more than a centroid" finding below; this is
-diagnostic, not a blocker. M2 is considered closed on balance.
+NC-vs-LR gap finding below; at M2 sample sizes this is not diagnostic of
+representation geometry. Attribute-decoder wins should also be read against
+the majority baseline in `runs/m2_report.json` (some attributes are only
+modestly above majority); treat the 0.89 / 0.84 headline numbers as upper
+bounds, not as evidence that the bundle framing is right. M2 closed on
+balance as infra; the scientific interpretation is deferred to M3.
 
 ## Full layer-sweep table
 
@@ -66,27 +70,33 @@ band. This is the residual stream going from "near-token features" to
 transformer story. Peak candidate-identity signal sits around layers 14–17.
 Peak attribute signal is slightly later (17–22) and stays high through L26.
 
-### 2. Candidate identity needs more than a centroid
+### 2. NC-vs-LR gap — suggestive but not yet diagnostic
 
 Nearest-centroid tops out at 0.12 (vs. chance 0.05); multinomial logreg on
-the same activations hits 0.38. The 3× gap says the secret's representation
-at Ready is not a single direction per candidate — it's a richer manifold
-that cosine-to-mean can't capture. This has teeth for the blog: *if the model
-had a simple "TIGER vector," NC would win*. It doesn't. That pushes the
-scientific claim toward the "answer-sufficient attribute bundle" framing more
-than the "single concept neuron" framing, which aligns with the plan's
-hypothesis in §10.
+the same activations hits 0.38. Two things could produce this 3× gap:
+(a) the secret's representation at Ready isn't a single direction per
+candidate — it's a richer manifold that cosine-to-mean can't capture;
+(b) NC is simply underpowered at 8 samples/class and will close the gap
+with more data. We cannot distinguish these at M2 sample sizes. M3 at
+~100 runs/class is the test: if NC stays below LR there, (a) gains weight;
+if NC catches up, the "single concept direction" story is back in play.
+**Do not lean on the attribute-bundle framing for the headline yet.**
 
-### 3. Zero calibration→self-chosen transfer (ignoring L0)
+### 3. Zero nearest-centroid transfer calibration→self-chosen (ignoring L0)
 
 SC-agree is 0.00–0.05 everywhere except L0 (0.41, but L0 is the raw
 embedding; its "signal" is most likely surface-lexical leakage from the
-tiger-heavy self-chosen distribution — see finding 4). This is a **calibration
-failure that matters for M3 planning**: the Ready-only calibration teaches
-the decoder to pick up index-related signal, not a concept that generalizes
-to the self-chosen condition. Consistent with D-01's stance that calibration
-is infra, not the scientific result. The fix at M3 is to introduce question
-turns so the model must commit to an observable semantic direction.
+tiger-heavy self-chosen distribution — see finding 4). **Important caveat:
+this is measured only with nearest-centroid.** LR and per-attribute transfer
+have not yet been measured, so "zero transfer across readouts" is not
+established — only "zero NC transfer" is. Given NC underperformed on the
+calibration task itself, it's a weak choice as the sole transfer metric.
+M3 should measure transfer with every readout (NC, LR, binary attributes)
+before concluding that calibration→self-chosen transfer fails.
+
+Still, the NC result is consistent with D-01's stance that calibration is
+infra, not the scientific result. The planned M3 fix — question turns that
+force the Ready-state commitment — is independently motivated.
 
 ### 4. Heavy prior bias under self-chosen — tiger 40%
 

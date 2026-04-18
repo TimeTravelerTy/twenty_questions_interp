@@ -1,9 +1,10 @@
-"""Run a single Ready-capture dialogue end-to-end.
+"""Run a single dialogue end-to-end with Ready-state and optional question turns.
 
-M2 scope only: we capture residual-stream activations at every layer at the
-token position immediately before `Ready` is generated (DECISIONS.md D-08),
-emit `Ready`, optionally ask for a reveal (self-chosen only), and persist a
-`RunManifest` + per-layer activations.
+The base capture is still the M2 Ready-state activation at the token position
+immediately before `Ready` is generated (DECISIONS.md D-08). M3 extends this by
+optionally capturing all-layer pre-answer activations on later yes/no question
+turns, persisting them in the run directory, and recording parsed answers in
+the manifest.
 
 Uses `transformers` directly rather than NNsight. NNsight is overkill for pure
 activation capture; it will come in at M3+ when we start doing interventions
@@ -19,13 +20,14 @@ from typing import Any
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from .banks import Bank
-from .manifest import RunManifest
+from .banks import Bank, Question
+from .manifest import RunManifest, TurnRecord
 from .permutations import Permutation
 from .prompts import (
     REVEAL_USER_MESSAGE,
     RenderedPrompt,
     calibration_prompt,
+    question_turn_prompt,
     self_chosen_prompt,
 )
 
@@ -135,12 +137,15 @@ def capture_ready_state(
     return last_pos_states, raw
 
 
-_READY_RE = re.compile(r"^\s*ready\b", re.IGNORECASE)
+# Strict: the generated chunk must be exactly the word "ready" (case-insensitive),
+# allowing only whitespace and terminal punctuation. "Ready, I chose tiger" must
+# NOT pass — that would be a covert leak of the secret via the Ready token.
+_READY_RE = re.compile(r"^\s*ready\s*[.!]?\s*$", re.IGNORECASE)
 
 
 def parse_ready(raw: str) -> bool:
-    """Return True if the model's first generated chunk starts with 'ready'."""
-    return bool(_READY_RE.match(raw.strip()))
+    """Return True iff the model's output is a bare 'ready' (no trailing content)."""
+    return bool(_READY_RE.match(raw))
 
 
 @torch.no_grad()
@@ -172,10 +177,106 @@ def parse_reveal_to_canonical(raw_reveal: str, bank: Bank) -> str | None:
     for c in bank.candidates:
         for alias in (c.display, *c.aliases):
             alias_l = alias.lower()
-            if re.search(rf"\b{re.escape(alias_l)}\b", text):
-                if best is None or len(alias_l) > best[0]:
-                    best = (len(alias_l), c.id)
+            if re.search(rf"\b{re.escape(alias_l)}\b", text) and (
+                best is None or len(alias_l) > best[0]
+            ):
+                best = (len(alias_l), c.id)
     return best[1] if best else None
+
+
+_YES_RE = re.compile(r"^\s*yes\s*[.!]?\s*$", re.IGNORECASE)
+_NO_RE = re.compile(r"^\s*no\s*[.!]?\s*$", re.IGNORECASE)
+
+
+def parse_yes_no(raw: str) -> bool | None:
+    """Return True for Yes, False for No, or None if the output is malformed."""
+    if _YES_RE.match(raw):
+        return True
+    if _NO_RE.match(raw):
+        return False
+    return None
+
+
+def _history_to_chat_turns(
+    ready_output: str,
+    turns: list[TurnRecord],
+) -> list[dict[str, str]]:
+    """Render the assistant/user turns after the initial Ready response."""
+    extra_turns = [{"role": "assistant", "content": ready_output.strip()}]
+    for turn in turns:
+        extra_turns.append({"role": "user", "content": question_turn_prompt(turn.question_text)})
+        extra_turns.append({"role": "assistant", "content": turn.raw_model_output.strip()})
+    return extra_turns
+
+
+@torch.no_grad()
+def capture_question_state(
+    handle: ModelHandle,
+    rendered: RenderedPrompt,
+    ready_output: str,
+    turns: list[TurnRecord],
+    question_text: str,
+    answer_max_new_tokens: int = 8,
+) -> tuple[torch.Tensor, str]:
+    """Capture all-layer activations at the token position right before an answer."""
+    extra_turns = _history_to_chat_turns(ready_output, turns)
+    extra_turns.append({"role": "user", "content": question_turn_prompt(question_text)})
+    input_ids = _build_chat_input_ids(handle, rendered, extra_turns=extra_turns)
+
+    outputs = handle.model(
+        input_ids=input_ids,
+        output_hidden_states=True,
+        return_dict=True,
+        use_cache=False,
+    )
+    last_pos_states = torch.stack(
+        [h[:, -1, :].squeeze(0).float().cpu() for h in outputs.hidden_states], dim=0
+    )
+
+    gen = handle.model.generate(
+        input_ids=input_ids,
+        max_new_tokens=answer_max_new_tokens,
+        do_sample=False,
+        pad_token_id=handle.tokenizer.eos_token_id,
+    )
+    new_tokens = gen[0, input_ids.shape[1]:]
+    raw = handle.tokenizer.decode(new_tokens, skip_special_tokens=True)
+    return last_pos_states, raw
+
+
+def collect_question_turns(
+    handle: ModelHandle,
+    rendered: RenderedPrompt,
+    ready_output: str,
+    questions: list[Question],
+    run_dir: Path | None = None,
+) -> tuple[list[TurnRecord], dict[int, str]]:
+    """Run a fixed question sequence and optionally persist per-turn activations."""
+    turns: list[TurnRecord] = []
+    turn_activation_paths: dict[int, str] = {}
+
+    for turn_idx, question in enumerate(questions, start=1):
+        activations, raw_answer = capture_question_state(
+            handle=handle,
+            rendered=rendered,
+            ready_output=ready_output,
+            turns=turns,
+            question_text=question.text,
+        )
+        turns.append(
+            TurnRecord(
+                question_id=question.id,
+                question_text=question.text,
+                raw_model_output=raw_answer,
+                answer_bool=parse_yes_no(raw_answer),
+            )
+        )
+        if run_dir is not None:
+            act_path = run_dir / f"turn_{turn_idx:02d}_activations.pt"
+            torch.save(activations, act_path)
+            turn_activation_paths[turn_idx] = str(act_path)
+
+    return turns, turn_activation_paths
 
 
 def run_calibration_dialogue(
@@ -186,8 +287,9 @@ def run_calibration_dialogue(
     seed: int,
     run_id: str,
     out_dir: Path,
+    questions: list[Question] | None = None,
 ) -> RunManifest:
-    """Run one calibration dialogue, persist manifest + activations. Ready-only (M2)."""
+    """Run one calibration dialogue and optionally continue with question turns."""
     display_names = {c.id: c.display for c in bank.candidates}
     secret_idx = perm.displayed_index(secret_canonical_id)
     rendered = calibration_prompt(perm, display_names, secret_idx)
@@ -198,6 +300,16 @@ def run_calibration_dialogue(
     run_dir.mkdir(parents=True, exist_ok=True)
     act_path = run_dir / "activations.pt"
     torch.save(activations, act_path)
+    turns: list[TurnRecord] = []
+    turn_activation_paths: dict[int, str] = {}
+    if questions:
+        turns, turn_activation_paths = collect_question_turns(
+            handle=handle,
+            rendered=rendered,
+            ready_output=ready_raw,
+            questions=questions,
+            run_dir=run_dir,
+        )
 
     manifest = RunManifest(
         run_id=run_id,
@@ -215,7 +327,9 @@ def run_calibration_dialogue(
         secret_displayed_index=secret_idx,
         ready_raw_output=ready_raw,
         ready_parse_ok=parse_ready(ready_raw),
+        turns=turns,
         activation_paths={i: str(act_path) for i in range(activations.shape[0])},
+        turn_activation_paths=turn_activation_paths,
         hidden_size=int(activations.shape[-1]),
     )
     manifest.save(run_dir / "manifest.json")
@@ -230,8 +344,9 @@ def run_selfchosen_dialogue(
     run_id: str,
     out_dir: Path,
     elicit_reveal_after: bool = True,
+    questions: list[Question] | None = None,
 ) -> RunManifest:
-    """Run one self-chosen dialogue, persist manifest + activations."""
+    """Run one self-chosen dialogue and optionally continue with question turns."""
     display_names = {c.id: c.display for c in bank.candidates}
     rendered = self_chosen_prompt(perm, display_names)
 
@@ -247,6 +362,16 @@ def run_selfchosen_dialogue(
     run_dir.mkdir(parents=True, exist_ok=True)
     act_path = run_dir / "activations.pt"
     torch.save(activations, act_path)
+    turns: list[TurnRecord] = []
+    turn_activation_paths: dict[int, str] = {}
+    if questions:
+        turns, turn_activation_paths = collect_question_turns(
+            handle=handle,
+            rendered=rendered,
+            ready_output=ready_raw,
+            questions=questions,
+            run_dir=run_dir,
+        )
 
     manifest = RunManifest(
         run_id=run_id,
@@ -264,9 +389,11 @@ def run_selfchosen_dialogue(
         secret_displayed_index=None,
         ready_raw_output=ready_raw,
         ready_parse_ok=parse_ready(ready_raw),
+        turns=turns,
         end_of_game_reveal=reveal_raw,
         reveal_canonical_id=reveal_canonical,
         activation_paths={i: str(act_path) for i in range(activations.shape[0])},
+        turn_activation_paths=turn_activation_paths,
         hidden_size=int(activations.shape[-1]),
     )
     manifest.save(run_dir / "manifest.json")

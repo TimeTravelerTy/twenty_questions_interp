@@ -14,9 +14,11 @@ from dataclasses import dataclass
 
 from .permutations import Permutation
 
-# Bump PROMPT_TEMPLATE_ID whenever any string below changes. Every RunManifest
-# pins the ID it was built against.
-PROMPT_TEMPLATE_ID = "v1-2026-04-18"
+# Bump PROMPT_TEMPLATE_ID whenever any string below changes, OR when the prompt
+# surface grows a new template used in the dialogue (e.g. adding question_turn_
+# prompt). Every RunManifest pins the ID it was built against so decoders can
+# filter on it. v2: added question_turn_prompt for M3 turnful dialogues.
+PROMPT_TEMPLATE_ID = "v2-2026-04-19"
 
 
 def _candidate_list(perm: Permutation, display_names: dict[str, str]) -> str:
@@ -83,6 +85,14 @@ def self_chosen_prompt(
         "reply with only the single word: Ready"
     )
     return RenderedPrompt(system=system, user=user)
+
+
+def question_turn_prompt(question_text: str) -> str:
+    """Build a single yes/no question turn for the ongoing dialogue."""
+    return (
+        f"{question_text.strip()}\n"
+        "Reply with only one word: Yes or No"
+    )
 
 
 # Follow-up turn used only at the end of self-chosen smoke runs (M2.2b).

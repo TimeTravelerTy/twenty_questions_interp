@@ -85,3 +85,14 @@ targeted distinguishers (`is_ridden_by_humans`, `produces_dairy_milk`, `purrs`,
 `soars_during_daylight`) and dropped 2 redundant predicates
 (`lives_primarily_on_land`, `is_warm_blooded`). Final bank: 30 questions, all
 190 candidate pairs distinguishable on >=2 questions.
+
+## 2026-04-19 — M3 dialogue plumbing
+
+### D-16: Persist one all-layer tensor per question turn and replay raw answers
+M3 needs `h^{(ℓ)}_{r,t}` at each pre-answer position, not just the Ready state.
+Store one `.pt` tensor per turn (`turn_<nn>_activations.pt`) and record its path
+in `RunManifest.turn_activation_paths` keyed by 1-based turn index. This keeps
+M2's Ready-state `activation_paths` backward-compatible while making turn-wise
+capture explicit. When constructing later turns, replay the model's **raw**
+earlier answers in the chat history, not a normalized yes/no canonicalization,
+so the captured state reflects the actual dialogue the model saw.

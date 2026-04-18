@@ -16,5 +16,6 @@ the change in `docs/DECISIONS.md` and bump a version string.
 1. Draft animals + questions for attribute diversity (see M1 in plan).
 2. Fill `answers.csv` with best-effort labels.
 3. Manual review of edge cases (e.g., orca = mammal, penguin ≠ flies).
-4. `python scripts/validate_answers.py` — enforces no NaNs, question balance,
-   pairwise distinguishability ≥3, per-question entropy report.
+4. `python scripts/validate_answers.py` — enforces no NaNs, question balance
+   (1..19 yeses; excludes only all-yes/all-no predicates), pairwise
+   distinguishability ≥ 2 (see DECISIONS.md D-14), per-question entropy report.

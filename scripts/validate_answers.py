@@ -2,8 +2,10 @@
 
 Checks:
   1. All loaders pass (no NaNs, no non-binary, alignment with yaml files).
-  2. Each question splits the bank non-trivially (5..15 yeses inclusive).
-  3. Every pair of candidates differs on at least 3 questions.
+  2. Each question splits the bank non-trivially (MIN_YES..MAX_YES inclusive;
+     currently 1..19 — see comment on MIN_YES below).
+  3. Every pair of candidates differs on at least MIN_PAIRWISE_DIFF questions
+     (currently 2 — see DECISIONS.md D-14).
   4. Print a per-question entropy / yes-count report.
 
 Exits non-zero on any violation.

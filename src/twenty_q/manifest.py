@@ -49,6 +49,9 @@ class RunManifest(BaseModel):
 
     # Activations — layer index -> absolute or repo-relative path.
     activation_paths: dict[int, str] = Field(default_factory=dict)
+    # Question-turn activations — turn index (1-based) -> path to the all-layer
+    # tensor captured immediately before the answer at that turn.
+    turn_activation_paths: dict[int, str] = Field(default_factory=dict)
     hidden_size: int | None = None
 
     # Bookkeeping.
@@ -61,6 +64,6 @@ class RunManifest(BaseModel):
             json.dump(self.model_dump(), f, indent=2)
 
     @classmethod
-    def load(cls, path: Path) -> "RunManifest":
+    def load(cls, path: Path) -> RunManifest:
         with path.open() as f:
             return cls.model_validate(json.load(f))

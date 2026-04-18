@@ -4,8 +4,8 @@
 > without reading anything else. Update the `Last updated` line on every session.
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
-**Last agent:** Claude (Opus 4.7)
-**Last updated:** 2026-04-19 (after M2 close)
+**Last agent:** Codex (GPT-5)
+**Last updated:** 2026-04-19 (M3 local dialogue plumbing)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -14,35 +14,34 @@ Do not publish calibration-only results as the headline.
 
 ## Next concrete step
 
-M2 closed on balance (see `docs/progress/M2-ready-smoke-test.md`). Infra works;
-attribute decoders pass; NC LOO missed (0.12 vs 0.20 threshold) but LR LOO
-hit 0.38 — diagnostic, pushes toward the "answer-sufficient attribute bundle"
-framing over "single concept direction." Zero calibration→self-chosen transfer
-confirms calibration-as-infra stance.
+M2 closed on balance (see `docs/progress/M2-ready-smoke-test.md`). Local M3
+prep is now in place: `dialogue.py` can capture pre-answer activations on
+question turns, `RunManifest` stores per-turn activation files via
+`turn_activation_paths`, and the existing batch runners accept `--question-ids`
+to switch from Ready-only to turnful dialogues without another wrapper script.
 
-**M3 — scale to Gemma 3 4B on TSUBAME.** Use the `tsubame-ssh` skill for remote
-runs on an A100. Targets:
+**M3 — first remote smoke on Gemma 3 4B via TSUBAME.** Use the `tsubame-ssh`
+skill for remote runs on an A100. Do a small calibration smoke before the full
+2k run:
 
-1. Bump model to `google/gemma-3-4b-it`. Verify `capture_ready_state` works
-   unchanged (`output_hidden_states=True` is model-agnostic).
-2. Full calibration dataset: ~100 runs per candidate (2000 total). Keep per-run
-   permutation + seed logging.
-3. **Introduce question turns.** M2 was Ready-only; the Ready-state
-   commitment must be *forced*, not optional. See PLAN.md §6 for the
-   dialogue loop. This changes what's captured at each turn from
-   `h^{(ℓ)}_{r,0}` (pre-Ready) to `h^{(ℓ)}_{r,t}` (pre-answer at turn t).
-4. Re-measure the NC-vs-LR gap at 4B. If it persists, the attribute-bundle
-   hypothesis is strengthened; if NC catches up, single-direction back on
-   the table.
+1. Run `scripts/run_calibration.py` on `google/gemma-3-4b-it` with a tiny slice
+   first, e.g. 2 candidates × 1 seed, plus 2–3 questions via `--question-ids`
+   such as `is_mammal,can_fly,can_swim`.
+2. Verify manifests contain populated `turns` and `turn_activation_paths`, and
+   that answers parse cleanly as bare Yes/No.
+3. If the smoke passes, scale calibration to ~100 runs per candidate (2000
+   total), keeping per-run permutation + seed logging.
+4. Re-measure the NC-vs-LR gap at 4B with more samples per class. If it
+   persists with ~100 runs/class (where NC should be well-estimated), the
+   attribute-bundle hypothesis gains weight; if NC catches up, single-direction
+   is back on the table. Also measure LR/attribute transfer to self-chosen, not
+   just NC.
 5. Decide tiger-bias mitigation (see M2 progress note finding 4):
    (a) trust 4B to be more diverse, (b) add a "be diverse" nudge, or
    (c) oversample under-represented candidates in self-chosen.
 
 Ground truth for scientific claims remains self-chosen. Keep publishing only
 self-chosen results as the headline.
-
-Full plan is at `~/.claude/plans/here-is-a-project-calm-hummingbird.md` and
-`docs/PLAN.md` (scientific).
 
 Full plan is at `~/.claude/plans/here-is-a-project-calm-hummingbird.md` and
 `docs/PLAN.md` (scientific).

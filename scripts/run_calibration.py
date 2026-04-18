@@ -2,15 +2,19 @@
 
 Defaults to 8 runs per candidate (160 total) on Gemma 3 1B / CPU. Each run
 captures per-layer residual-stream activations at the Ready position plus a
-`RunManifest` under `runs/calibration/<run_id>/`.
+`RunManifest` under `runs/calibration/<run_id>/`. Pass `--question-ids` to
+continue past Ready and capture pre-answer activations on later turns.
 
 Usage:
     uv run python scripts/run_calibration.py --n-per-candidate 8
     uv run python scripts/run_calibration.py --n-per-candidate 1 --candidates tiger,cat
+    uv run python scripts/run_calibration.py --n-per-candidate 1 \
+        --candidates tiger --question-ids is_mammal,can_swim
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 import time
 
@@ -26,6 +30,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n-per-candidate", type=int, default=8)
     p.add_argument("--candidates", default="",
                    help="Comma-separated candidate ids to restrict to; empty = all 20.")
+    p.add_argument("--question-ids", default="",
+                   help="Comma-separated question ids to ask after Ready; empty = Ready-only.")
     p.add_argument("--seed-offset", type=int, default=0)
     p.add_argument("--device", default="cpu")
     return p.parse_args()
@@ -44,6 +50,13 @@ def main() -> int:
     if unknown:
         print(f"Unknown candidate ids: {sorted(unknown)}", file=sys.stderr)
         return 2
+    question_lookup = {q.id: q for q in bank.questions}
+    question_ids = [x.strip() for x in args.question_ids.split(",") if x.strip()]
+    unknown_questions = sorted(set(question_ids) - set(question_lookup))
+    if unknown_questions:
+        print(f"Unknown question ids: {unknown_questions}", file=sys.stderr)
+        return 2
+    questions = [question_lookup[qid] for qid in question_ids]
 
     print(f"Loading {args.model} on {args.device} ...")
     t0 = time.time()
@@ -55,7 +68,9 @@ def main() -> int:
     failures: list[str] = []
     for cid in target_ids:
         for k in range(args.n_per_candidate):
-            seed = args.seed_offset + hash((cid, k)) % (2**31)
+            # hashlib (not built-in hash) — process-stable, reproducible across runs.
+            digest = hashlib.sha256(f"{cid}:{k}".encode()).digest()
+            seed = (args.seed_offset + int.from_bytes(digest[:4], "big")) % (2**31)
             perm = shuffle_candidates(bank.candidate_ids, seed=seed)
             run_id = f"cal_{cid}_{k:02d}"
             t0 = time.time()
@@ -68,6 +83,7 @@ def main() -> int:
                     seed=seed,
                     run_id=run_id,
                     out_dir=CALIBRATION_RUNS_DIR,
+                    questions=questions or None,
                 )
             except Exception as e:  # noqa: BLE001
                 failures.append(f"{run_id}: {type(e).__name__}: {e}")
