@@ -1,0 +1,31 @@
+# Env / tooling
+.venv/
+.env
+.python-version-user
+*.egg-info/
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# Build
+build/
+dist/
+*.whl
+
+# Runs (activations + manifests are rebuildable; do not commit)
+runs/
+!runs/.gitkeep
+!runs/calibration/.gitkeep
+!runs/selfchosen/.gitkeep
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# Model cache
+.cache/
+hf_cache/
+
+# OS
+.DS_Store
