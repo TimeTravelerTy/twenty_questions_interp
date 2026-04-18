@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M2 — Ready-state decoder smoke test on Gemma 3 1B (local CPU).
+**Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
 **Last agent:** Claude (Opus 4.7)
-**Last updated:** 2026-04-18 (after M1 close)
+**Last updated:** 2026-04-19 (after M2 close)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -14,30 +14,35 @@ Do not publish calibration-only results as the headline.
 
 ## Next concrete step
 
-**Manual unblock first:** request access to `google/gemma-3-1b-it` on HF
-(https://huggingface.co/google/gemma-3-1b-it) — the repo is manually gated and
-`TheTwight` is not yet on the allowlist. Takes ~1 minute on the model page.
+M2 closed on balance (see `docs/progress/M2-ready-smoke-test.md`). Infra works;
+attribute decoders pass; NC LOO missed (0.12 vs 0.20 threshold) but LR LOO
+hit 0.38 — diagnostic, pushes toward the "answer-sufficient attribute bundle"
+framing over "single concept direction." Zero calibration→self-chosen transfer
+confirms calibration-as-infra stance.
 
-Then run in order:
+**M3 — scale to Gemma 3 4B on TSUBAME.** Use the `tsubame-ssh` skill for remote
+runs on an A100. Targets:
 
-```bash
-uv run python scripts/run_calibration.py --n-per-candidate 8
-uv run python scripts/run_selfchosen_smoke.py --n 40
-uv run python scripts/decode_ready.py
-```
+1. Bump model to `google/gemma-3-4b-it`. Verify `capture_ready_state` works
+   unchanged (`output_hidden_states=True` is model-agnostic).
+2. Full calibration dataset: ~100 runs per candidate (2000 total). Keep per-run
+   permutation + seed logging.
+3. **Introduce question turns.** M2 was Ready-only; the Ready-state
+   commitment must be *forced*, not optional. See PLAN.md §6 for the
+   dialogue loop. This changes what's captured at each turn from
+   `h^{(ℓ)}_{r,0}` (pre-Ready) to `h^{(ℓ)}_{r,t}` (pre-answer at turn t).
+4. Re-measure the NC-vs-LR gap at 4B. If it persists, the attribute-bundle
+   hypothesis is strengthened; if NC catches up, single-direction back on
+   the table.
+5. Decide tiger-bias mitigation (see M2 progress note finding 4):
+   (a) trust 4B to be more diverse, (b) add a "be diverse" nudge, or
+   (c) oversample under-represented candidates in self-chosen.
 
-This produces 160 calibration runs + 40 self-chosen runs, sweeps every layer
-with nearest-centroid / logistic-regression / binary-attribute decoders, and
-writes `docs/progress/M2-ready-smoke-test.md` plus `runs/m2_report.json`.
+Ground truth for scientific claims remains self-chosen. Keep publishing only
+self-chosen results as the headline.
 
-**Infra is proven.** A 1-run smoke pass on Qwen2.5-0.5B-Instruct (CPU, ~1s/run)
-loaded the model, captured 25 layer states, emitted `Ready`, and serialized
-a manifest. Gemma 3 1B should be a drop-in after access is granted.
-Full runtime estimate on Mac CPU: Gemma 3 1B is ~2x Qwen 0.5B in params, so
-roughly 200 runs × 2–5s ≈ 10–20 min total.
-
-See M2 exit criteria in `~/.claude/plans/here-is-a-project-calm-hummingbird.md`
-and `docs/DECISIONS.md` D-11.
+Full plan is at `~/.claude/plans/here-is-a-project-calm-hummingbird.md` and
+`docs/PLAN.md` (scientific).
 
 Full plan is at `~/.claude/plans/here-is-a-project-calm-hummingbird.md` and
 `docs/PLAN.md` (scientific).
@@ -49,9 +54,10 @@ Full plan is at `~/.claude/plans/here-is-a-project-calm-hummingbird.md` and
 - [x] **M0 — Repo bootstrap.** Skeleton, pyproject, docs seeded. See commit history.
 - [x] **M1 — Data artifacts + feasible-set utility.** 20 animals × 30 questions × 0/1
       table; pairwise-distinguishability floor relaxed to 2 (D-14); 13 tests pass.
-- [ ] **M2 — Ready-state decoder smoke test** (Gemma 3 1B, local CPU). 160 calibration
-      runs + 40 self-chosen smoke.
-- [ ] **M3 — TSUBAME + Gemma 3 4B, full calibration dataset (~2–4k).**
+- [x] **M2 — Ready-state decoder smoke test** (Gemma 3 1B, local CPU). 160 calibration
+      + 40 self-chosen runs; LR LOO 0.38 @ L15, attribute decoder 0.89 @ L17. See
+      `docs/progress/M2-ready-smoke-test.md`.
+- [ ] **M3 — TSUBAME + Gemma 3 4B, full calibration dataset (~2k).** With question turns.
 - [ ] **M4 — Self-chosen full study + causal patching.**
 - [ ] **M5 — Transcoder / SAE feature case studies.**
 - [ ] **M6 — Blog post draft.**

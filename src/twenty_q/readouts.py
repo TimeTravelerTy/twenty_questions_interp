@@ -72,12 +72,7 @@ def loo_accuracy_logreg(
         scaler = StandardScaler().fit(X[mask])
         X_train = scaler.transform(X[mask])
         X_test = scaler.transform(X[i : i + 1])
-        clf = LogisticRegression(
-            max_iter=2000,
-            C=C,
-            multi_class="multinomial",
-            solver="lbfgs",
-        )
+        clf = LogisticRegression(max_iter=2000, C=C, solver="lbfgs")
         clf.fit(X_train, [y[j] for j in range(n) if mask[j]])
         pred = clf.predict(X_test)[0]
         correct += int(pred == y[i])
