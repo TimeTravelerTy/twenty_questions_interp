@@ -68,6 +68,13 @@ at M3.
 ### D-13: Tooling — uv for env; ruff for lint; pytest for tests
 Standard modern Python. `uv sync` from `pyproject.toml`. No poetry.
 
+### D-15: M2 uses transformers directly, not NNsight
+For pure activation capture at the Ready position, `AutoModelForCausalLM`'s
+`output_hidden_states=True` is simpler and lower-friction than wrapping the
+model in NNsight. NNsight comes in at M3+ when we start doing interventions
+and need its tracing/patching API. The `capture_ready_state` function in
+`src/twenty_q/dialogue.py` is the seam to swap.
+
 ### D-14: Validator thresholds relaxed — yes-count 1..19, pairwise-diff >=2
 The plan's original `5 <= yes-count <= 15` and `pairwise-diff >= 3` were too
 strict for a 20-animal bank. (1) Rare taxonomic classes (1 amphibian, 1 insect,

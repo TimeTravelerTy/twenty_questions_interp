@@ -14,17 +14,30 @@ Do not publish calibration-only results as the headline.
 
 ## Next concrete step
 
-Write `src/twenty_q/prompts.py` (calibration + self-chosen templates;
-calibration is index-based per D-06), `src/twenty_q/hooks.py` (NNsight
-residual-stream capture at the token position immediately before `Ready`,
-**all layers** per D-08), and `src/twenty_q/dialogue.py` (drives a single
-Ready-capture run end-to-end). Target Gemma 3 1B (`google/gemma-3-1b-it`)
-on local CPU. Gemma 3 is gated on HF — user needs `HF_TOKEN` in `.env`.
+**Manual unblock first:** request access to `google/gemma-3-1b-it` on HF
+(https://huggingface.co/google/gemma-3-1b-it) — the repo is manually gated and
+`TheTwight` is not yet on the allowlist. Takes ~1 minute on the model page.
 
-After scaffolding: `scripts/run_calibration.py --n-per-candidate 8`
-(160 runs) and `scripts/run_selfchosen_smoke.py --n 40` produce manifests.
-Then `scripts/decode_ready.py` runs the layer sweep + nearest-centroid /
-logistic-regression / attribute decoders and writes the M2 progress note.
+Then run in order:
+
+```bash
+uv run python scripts/run_calibration.py --n-per-candidate 8
+uv run python scripts/run_selfchosen_smoke.py --n 40
+uv run python scripts/decode_ready.py
+```
+
+This produces 160 calibration runs + 40 self-chosen runs, sweeps every layer
+with nearest-centroid / logistic-regression / binary-attribute decoders, and
+writes `docs/progress/M2-ready-smoke-test.md` plus `runs/m2_report.json`.
+
+**Infra is proven.** A 1-run smoke pass on Qwen2.5-0.5B-Instruct (CPU, ~1s/run)
+loaded the model, captured 25 layer states, emitted `Ready`, and serialized
+a manifest. Gemma 3 1B should be a drop-in after access is granted.
+Full runtime estimate on Mac CPU: Gemma 3 1B is ~2x Qwen 0.5B in params, so
+roughly 200 runs × 2–5s ≈ 10–20 min total.
+
+See M2 exit criteria in `~/.claude/plans/here-is-a-project-calm-hummingbird.md`
+and `docs/DECISIONS.md` D-11.
 
 Full plan is at `~/.claude/plans/here-is-a-project-calm-hummingbird.md` and
 `docs/PLAN.md` (scientific).
@@ -47,6 +60,10 @@ Full plan is at `~/.claude/plans/here-is-a-project-calm-hummingbird.md` and
 
 ## Open questions
 
+- HF license approval for Gemma 3 1B is pending. Without it, M2 scales only to
+  open models (Qwen 2.5 0.5B, Llama-3.2 if granted, etc.). The plan keeps
+  Gemma 3 as the target (D-05); using a non-Gemma model for M2's scientific
+  exit criterion would break downstream SAE/transcoder reuse at M5.
 - Exact middle-layer target for Gemma 3 1B (26 layers → probably layer 13–18).
   Defer: M2 captures *all* layers, picked empirically from the sweep.
 - Question-regime choice for M2 dialogues (ambiguity-first vs. disambiguation-first).
