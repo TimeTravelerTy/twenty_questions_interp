@@ -5,7 +5,7 @@
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
 **Last agent:** Claude (Opus 4.7)
-**Last updated:** 2026-04-19 (self-chosen Ready smoke done; choice distribution collapsed to 2/4 classes, Ready geometry ~6.7× weaker than State B; see `docs/progress/M3-selfchosen-ready-smoke.md`)
+**Last updated:** 2026-04-19 (T=0.7 self-chosen replication done; choice collapse persists — salmon 96 / frog 24 / tiger 0 / eagle 0 across 120 attempts; geometry improved only 1.45× over T=0 and still 4.5× weaker than State B; 4-candidate self-chosen closed as a 4-way test, see `docs/progress/M3-selfchosen-ready-T07.md` and D-24)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -15,58 +15,72 @@ Do not publish calibration-only results as the headline.
 ## Next concrete step
 
 Prior notes in order of recency:
-**`docs/progress/M3-selfchosen-ready-smoke.md`** (job `7218660`),
+**`docs/progress/M3-selfchosen-ready-T07.md`** (job `7219788`),
+`docs/progress/M3-selfchosen-ready-smoke.md` (job `7218660`),
 `docs/progress/M3-h-persistence.md` (job `7218322`),
 `docs/progress/M3-binding-bank-audit.md`,
 `docs/progress/M3-3cond-binding-smoke.md` (job `7218265`),
 `docs/progress/M3-4cond-binding-smoke.md`, `docs/progress/M3-4b-smoke-diagnostics.md`.
 
-**Result so far (self-chosen Ready smoke, done):** 40 attempts on the same
-4 candidates as the persistence diagnostic. Two findings:
+**Result so far (T=0.7 self-chosen replication, done, see D-24):**
+120 attempts on the same 4 candidates with T=0.7 sampling across Ready,
+question, and reveal generations.
 
-1. **Choice distribution collapses.** salmon 33 / frog 7 / tiger 0 /
-   eagle 0. Strong position bias (salmon- or frog-at-position-0 always
-   chosen) + category bias (the two non-mammal-or-bird items dominate).
-   Under greedy decoding, "self-chosen" is closer to biased-forced-choice.
-2. **Self-chosen Ready is ~6.7× weaker than State B** (2-class balanced
-   analysis, salmon vs frog, n=7 each). Post-13 within-between contrast:
-   self-chosen +7.85e-05, State B +5.26e-04, State A +1.31e-02. Identity
-   is NC-decodable at 100% only from L29 onward — not at L21 where A and
-   B both peak.
+1. **Choice collapse persists.** salmon 96 / frog 24 / tiger 0 / eagle 0.
+   Temperature was not the cause; the 4B model's self-chosen prior on
+   this panel is ~{salmon: dominant, frog: minor, tiger/eagle: ~0}.
+   Salmon-at-position-0 → salmon 39/39; eagle@0 → salmon 31/31;
+   tiger@0 → salmon 20 / frog 4. Only frog@0 reliably flips (20/26).
+2. **Geometry tightened slightly but did not close the gap.** Balanced
+   2-class (salmon vs frog, n=4): post-13 contrast +1.14e-04 (vs T=0's
+   +7.85e-05, 1.45×); best NC layer shifted L29 → **L24**; still ~4.5×
+   weaker than State B at matched sample size. Comparison vote vs
+   persistence: **mixed** (nc tie at L21, contrast still state_b).
+3. **Answer correctness dropped to 53%** under sampling — sampling noise
+   eats the yes/no fluency that later calibration-based probes assume.
 
-Ordering: **A > B > self-chosen Ready** (by cosine contrast). The latent
-identity is still recoverable, but only at late layers with much weaker
-amplitude than either persistence state. See D-23.
+Conclusion: the 4-candidate self-chosen smoke is closed as a 4-way test
+at 4B. The fix is not more sampling — it's a less-biased prompt. Ordering
+still holds: **A > B > self-chosen Ready**.
 
-**Next concrete step:** patched self-chosen replication that (a) breaks the
-greedy choice collapse and (b) falls back to restricted-class analysis
-when the full 4-class quota isn't met.
+**Next concrete step:** full 20-candidate self-chosen smoke, to test the
+hypothesis that diluting the salmon attractor with 16 additional animals
+(a) broadens the realized-class distribution enough to run a 4+ way test
+and (b) is in any case the scientifically cleaner self-chosen setup
+required for M4.
 
-1. Patch `scripts/diagnose_selfchosen_ready.py` to:
-   - Emit the ready-analysis block whenever ≥2 classes have ≥`n-per-candidate`
-     kept runs (don't abort).
-   - Accept a `--temperature` flag (default 0.0 = greedy; non-zero enables
-     `do_sample=True` with that temperature) so we can trade determinism
-     for distribution variety.
-2. On TSUBAME, run a temperature-sampled replication:
-   `python scripts/diagnose_selfchosen_ready.py --model google/gemma-3-4b-it --device auto --dtype bfloat16 --n-per-candidate 4 --max-attempts 120 --temperature 0.7 --out-dir runs/diag/selfchosen_ready_T07 --persistence-results runs/diag/persistence_smoke_20260419/results.json`
-3. If that still collapses, widen the candidate list (e.g. the full 20)
-   and re-run; that's a scientifically-cleaner self-chosen setup for
-   M4 anyway.
-4. Once 4+ classes are realized, read `ready_analysis.comparison_to_persistence`
-   and update `docs/progress/M3-selfchosen-ready-smoke.md` with the
-   stronger numbers.
+1. Decide the question set. Either (a) keep the 4 primary attribute
+   questions from persistence/self-chosen-smoke (`is_mammal, is_bird,
+   lives_primarily_in_water, has_four_legs`) for direct comparability,
+   or (b) use the full bank. Default to (a) for comparability — the
+   representational claim is about Ready-state, not question dynamics.
+2. Invoke `scripts/diagnose_selfchosen_ready.py` with the full 20-bank
+   subset (no `--candidates` → falls through to the `DEFAULT_CANDIDATES`
+   hardcoded 4; needs a trivial change to accept "all 20" either via
+   `--candidates $(full list)` or by making the default behaviour pull
+   from `load_bank()` when a sentinel like `--candidates all` is given.
+   Simpler fix: pass all 20 ids explicitly in the job script).
+3. On TSUBAME, submit T=0.0 first (to characterize the greedy
+   distribution on the 20-candidate prompt) with generous `--max-attempts`
+   (say 200) and `--n-per-candidate 2` as a quota floor. Expected runtime
+   ≤10 min on H100 given the ~45s/run × 200 bound.
+4. If T=0.0 on 20 still collapses to one or two classes, add T=0.7 as a
+   follow-up; if that also collapses, scale the model (D-05).
+5. Pull results, compute the 4+ way `comparison_to_persistence` (will
+   require persistence results to be restricted to the same class set
+   for a fair comparison — probably do the comparison in an ad-hoc
+   analysis notebook first, like we did for the 2-class T=0.7 run).
+6. Write `docs/progress/M3-selfchosen-20bank.md` and update STATUS / D-24.
 
 **Open threads kept deliberately on the backlog, not closed:**
-- **Bigger-model ladder (D-05):** competence at 12B+ will likely widen
-  the self-chosen distribution and clean the geometry; re-run both
-  `diagnose_persistence.py` and `diagnose_selfchosen_ready.py` when we
-  scale.
-- **Bank improvement:** the 20×30 answer table still has documented
-  disputed cells (`docs/progress/M3-binding-bank-audit.md`); a broader
-  audit is due but not blocking the current research branch.
-- **Full 20-candidate self-chosen:** whether the position / category
-  biases above survive when the prompt contains all 20 is untested.
+- **Bigger-model ladder (D-05):** 4B's salmon attractor may be model-specific.
+  At 12B+ the distribution could sharpen differently or flatten — re-run
+  both `diagnose_persistence.py` and `diagnose_selfchosen_ready.py` when
+  we scale.
+- **Bank improvement:** disputed cells in the 20×30 table
+  (`docs/progress/M3-binding-bank-audit.md`) touched `frog.has_four_legs`,
+  which showed up in both self-chosen smokes' 53% correctness number.
+  Not blocking the 20-candidate run, still worth a broader audit pass.
 
 Ground truth for scientific claims remains self-chosen. Keep publishing only
 self-chosen results as the headline.

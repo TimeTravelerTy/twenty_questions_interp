@@ -309,3 +309,44 @@ Kept open, not closed:
   answer correctness.
 - **Full 20-candidate self-chosen.** Whether the 20-way prompt produces
   a wider distribution under greedy is untested.
+
+### D-24: T=0.7 sampling does not break the 4-candidate choice collapse at 4B
+
+Follow-up to D-23 (`docs/progress/M3-selfchosen-ready-T07.md`, job `7219788`).
+120-attempt T=0.7 self-chosen replication, same 4-candidate panel:
+
+- Distribution remains 2-class: **salmon 96, frog 24, tiger 0, eagle 0**.
+  Sampling at T=0.7 does not surface tiger or eagle in 120 attempts — the
+  model's self-chosen prior at 4B is approximately a mixture of salmon
+  (dominant) and frog (minor), with near-zero mass on the other two.
+- Position-0 diagnostic: salmon is a strong attractor even when eagle
+  (31/31 → salmon) or tiger (20/24 → salmon) is shown first. Only frog@0
+  reliably flips the choice (20/26).
+- Geometry improved modestly: post-13 within-between contrast rose from
+  +7.85e-05 (T=0) to +1.14e-04 (T=0.7, 1.45×), and best-NC layer shifted
+  from L29 to L24. Still ~4.5× weaker than persistence State B at matched
+  2-class sample size.
+- Primary-question correctness dropped to 53% (vs higher at T=0) — sampling
+  noise degrades the yes/no fluency that downstream probes assume.
+
+Decisions:
+
+- **The 4-candidate self-chosen smoke is closed as a 4-way test at 4B.**
+  Neither greedy nor T=0.7 realizes the 4 classes the diagnostic was
+  designed to compare. Any further 4-way self-chosen analysis needs the
+  broader 20-candidate prompt (to dilute the salmon attractor) or a bigger
+  model (D-05).
+- **M4/M5 guidance unchanged from D-23.** Probes fit at self-chosen Ready
+  directly; SAE case studies target layers ≥ L24 (relaxed one block earlier
+  than D-23's L29 given the T=0.7 shift).
+- **Sampling in the diagnostic is a knob, not the fix.** Temperature widens
+  the geometric gap by a small factor but does not reach a competence
+  regime where the prompt is fair. The next productive self-chosen run
+  must widen the candidate set.
+
+Kept open, not closed:
+
+- **D-05 model ladder.** Still a standing retest target.
+- **Bank audit.** Unchanged.
+- **20-candidate self-chosen.** Now promoted from "optional" to the main
+  next self-chosen experiment in STATUS.md.
