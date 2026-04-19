@@ -4,8 +4,8 @@
 > without reading anything else. Update the `Last updated` line on every session.
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
-**Last agent:** Codex (GPT-5)
-**Last updated:** 2026-04-19 (bank audit done; disputed frog cell helps a bit but calibration still misses gate)
+**Last agent:** Claude (Opus 4.7)
+**Last updated:** 2026-04-19 (H-persistence test done; replaced by H-rotation: entity is still NC-decodable at turn 2, but geometry rotates and amplitude collapses ~25x)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -14,42 +14,55 @@ Do not publish calibration-only results as the headline.
 
 ## Next concrete step
 
-Prior notes: `docs/progress/M3-4b-smoke-diagnostics.md`,
-`docs/progress/M3-4cond-binding-smoke.md`, and the new
-**`docs/progress/M3-3cond-binding-smoke.md`** (job `7218265`).
-Bank-audit follow-up: **`docs/progress/M3-binding-bank-audit.md`**.
+Prior notes in order of recency: **`docs/progress/M3-h-persistence.md`**
+(job `7218322`), `docs/progress/M3-binding-bank-audit.md`,
+`docs/progress/M3-3cond-binding-smoke.md` (job `7218265`),
+`docs/progress/M3-4cond-binding-smoke.md`, `docs/progress/M3-4b-smoke-diagnostics.md`.
 
-**Result so far:** none of the three non-index prompts tried in the
-follow-up cleared the ≥95% primary gate.
-- `name_paraphrase` 84.4%, `name_strict` 84.4%, `verbalized_index` 71.9%.
-- `verbalized_index` verbalized the correct name in 8/8 runs but still
-  drifted to candidate-list priors by Ready; `eagle.is_mammal=Yes` and
-  `eagle.can_swim=Yes` happened in every single eagle run across all
-  conditions.
-- Plain within-cos remains near 1.0; within-vs-between contrast is ~10x
-  larger than on the 4cond run but does not track correctness.
+**Result so far (H-persistence diagnostic, done):** on `verbalized_index`,
+all 8 runs verbalize the correct name. At middle layers the entity is
+**100% NC-decodable at both state A (post-verbalization) and state B
+(pre-Ready)** — but:
 
-Decision per D-19/D-20: **do not reverse D-06, do not scale**. The bank audit
-shows one real source of label noise (`frog.has_four_legs` under the surface
-question "Does it walk primarily on four legs?"), but even the favorable
-rescoring only lifts the best name conditions from `84.4%` to `90.6%`. The
-answer table contributes noise; it does not rescue calibration. Hypothesis
-remains **H-persistence**: at 4B the instantiated-entity representation does
-not reliably persist across a chat-turn boundary even when name retrieval
-succeeds.
+- **Cross A→B at layer 21 = 37.5%** (at-chance for most middle layers).
+  Centroids fit at A do not classify B.
+- **Within-vs-between cosine contrast at B is ~25× weaker than at A**
+  (5.17e-04 vs 1.28e-02, post-L13). The entity signal is still present but
+  nearly drowned in Ready-prep components.
+- Primary correctness still 71.9% with the exact same systematic errors
+  (eagle → mammal=Yes in 2/2, frog → mammal=Yes in 2/2, etc.).
 
-**Next concrete step:** mechanistic H-persistence test on `verbalized_index`.
+The original H-persistence hypothesis ("entity does not persist") is
+**refuted in its strong form**. Replaced by **H-rotation**: entity identity
+persists across the chat-turn boundary, but the geometry rotates and the
+amplitude collapses. Attribute readouts trained at A would not transfer to
+B — which is exactly what explains the answer drift.
 
-1. Re-run `verbalized_index` on the same 4 candidates × 2 seeds.
-2. Capture **two pre-generation states** per run:
-   - end of turn 1, immediately after the model verbalizes the secret name;
-   - end of turn 2, immediately before the standard `Ready`.
-3. Fit the minimum-viable attribute readout on the turn-1 states and score it
-   on the turn-2 states. If turn-1 looks entity-consistent and turn-2 does
-   not, H-persistence is directly measured.
-4. Only after that, consider the small self-chosen 4B smoke on the same
-   question set to see whether self-chosen behavior looks closer to the name
-   regime or to `verbalized_index`.
+**Next concrete step:** small self-chosen 4B smoke on the same primary
+question set to decide which regime self-chosen resembles.
+
+1. Use the existing `scripts/run_selfchosen_smoke.py` (or a thin
+   persistence-style variant of it) on `google/gemma-3-4b-it`.
+2. Use the same 4 candidates and the primary question set
+   (`is_mammal, is_bird, lives_primarily_in_water, has_four_legs`).
+3. Capture the Ready-state activations per run. Compute within-vs-between
+   contrast and NC LOO across the 4 "implicit" secrets the model chose.
+4. Compare: does self-chosen Ready look like State A (clean,
+   high-contrast, probe-ready) or State B (decodable identity but
+   collapsed amplitude)?
+
+If self-chosen looks like A: the readout pipeline is unblocked; pick a
+layer, scale the calibration, move to M3 full. If self-chosen looks like
+B: the blog story has to center on "decodable-but-rotated latent," and
+we need to think harder about where in the dialogue to anchor probes —
+possibly before we bother with the full calibration sweep.
+
+**Open threads kept deliberately on the backlog, not closed:**
+- **Bigger-model ladder (D-05):** competence at 12B+ will likely change
+  the H-rotation picture; re-run `diagnose_persistence.py` when we scale.
+- **Bank improvement:** the 20×30 answer table still has documented
+  disputed cells (`docs/progress/M3-binding-bank-audit.md`); a broader
+  audit is due but not blocking the current research branch.
 
 Ground truth for scientific claims remains self-chosen. Keep publishing only
 self-chosen results as the headline.

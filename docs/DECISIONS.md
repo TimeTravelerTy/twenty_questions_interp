@@ -179,3 +179,60 @@ Decision: do **not** opportunistically patch the canonical bank mid-M3 just to
 rescue this smoke. The bank should be revisited in a broader audit later, but
 the current calibration failure is not primarily a table problem. Move on to
 the mechanistic H-persistence test.
+
+## 2026-04-19 — D-21: H-persistence refuted in strong form; replace with H-rotation
+
+The persistence diagnostic (`docs/progress/M3-h-persistence.md`, job
+`7218322`) captured two all-layer hidden states per `verbalized_index` run:
+State A right before the model verbalizes the secret name, and State B
+right before Ready one turn later. Per-layer NC LOO + cross-state
+transfer + within-vs-between cosine contrast were computed on 4 candidates
+× 2 seeds = 8 runs.
+
+Findings:
+
+- NC LOO reaches **100% at layer 21 for both A and B** (chance 25%), and
+  100% at B from layer 6 onward. Entity identity is separable at both
+  timepoints.
+- **Cross A→B at layer 21 is 37.5%**; middle-layer sub-bands (17–30) are
+  ≤75%. Centroids learned at A do not classify B.
+- Post-L13 within-vs-between cosine contrast is ~25× larger at A than B
+  (+1.28e-02 vs +5.17e-04). Entity signal is still present at B but
+  much smaller relative to other components.
+- Primary correctness reproduces at 71.9% with the same systematic
+  mammal-bias errors (eagle, frog, salmon all say is_mammal=Yes).
+
+Decision:
+
+1. H-persistence is **refuted in its strong form**. The entity does
+   persist as identity across the chat-turn boundary at 4B.
+2. Adopt **H-rotation** as the working hypothesis: across a chat-turn
+   boundary, the entity representation undergoes substantial rotation in
+   middle layers and ~25× amplitude collapse relative to the point of
+   retrieval. Identity probes still work; attribute probes trained at A
+   would not transfer to B, and that rotation is what explains the
+   answer-drift we kept surfacing.
+3. The readout-pipeline implication: probes must be fit at the same
+   dialogue position they will be evaluated at. Readouts fit on a
+   "fluent verbalization" state will not transfer to a Ready state one
+   turn later, at least at 4B.
+4. Next scientific branch: run a small self-chosen smoke at 4B on the
+   same primary question set and compare self-chosen Ready activations
+   to State A vs State B. The shape of that comparison determines
+   whether the blog claim can be "fluent latent secret" (self-chosen ≈
+   A) or has to be "decodable-but-rotated latent" (self-chosen ≈ B).
+5. Do not reverse D-06. Do not scale calibration yet.
+
+Explicitly kept open, not closed:
+
+- **Model ladder (D-05 still stands):** H-rotation at 4B is a claim
+  about 4B. At 12B and 27B, competence likely shifts and the rotation
+  may shrink. Re-running `diagnose_persistence.py` when scaling up is
+  standing backlog.
+- **Bank audit:** the disputed cells from D-20 remain on the backlog.
+  The representational finding in this run does not depend on answer
+  correctness; it uses candidate-ID labels.
+- **Other binding conditions:** only `verbalized_index` was tested for
+  cross-state transfer. Whether name-based conditions also rotate is
+  untested; if it becomes load-bearing, extend the persistence script
+  to capture A for each condition.
