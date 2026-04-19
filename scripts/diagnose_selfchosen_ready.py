@@ -79,6 +79,17 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--seed-offset", type=int, default=2_000_000)
     p.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help=(
+            "Decoding temperature for generation. 0.0 = greedy (default). "
+            ">0 enables do_sample=True with this temperature across Ready, "
+            "question-turn, and reveal generations — intended to break the "
+            "greedy choice collapse observed in the T=0 smoke."
+        ),
+    )
+    p.add_argument(
         "--persistence-results",
         default="runs/diag/persistence_smoke/results.json",
         help="Optional diagnose_persistence results.json for A-vs-B comparison.",
@@ -92,12 +103,22 @@ def _run_one(
     seed: int,
     run_id: str,
     out_dir: Path,
+    temperature: float = 0.0,
 ) -> tuple[dict[str, Any], torch.Tensor]:
     display_names = {c.id: c.display for c in bank.candidates}
     perm = shuffle_candidates(bank.candidate_ids, seed=seed)
     rendered = self_chosen_prompt(perm, display_names)
 
-    ready_states, ready_raw = capture_ready_state(handle, rendered)
+    # With temperature sampling we still want per-attempt reproducibility,
+    # so seed the generators before each stochastic generate call.
+    if temperature and temperature > 0.0:
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+
+    ready_states, ready_raw = capture_ready_state(
+        handle, rendered, temperature=temperature
+    )
 
     run_dir = out_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -110,8 +131,11 @@ def _run_one(
         ready_output=ready_raw,
         questions=list(bank.questions),
         run_dir=run_dir,
+        temperature=temperature,
     )
-    reveal_raw = elicit_reveal_after_turns(handle, rendered, ready_raw, turns)
+    reveal_raw = elicit_reveal_after_turns(
+        handle, rendered, ready_raw, turns, temperature=temperature
+    )
     reveal_canonical = parse_reveal_to_canonical(reveal_raw, bank)
 
     answers: list[dict[str, Any]] = []
@@ -147,7 +171,12 @@ def _run_one(
         device=handle.device,
         prompt_template_id=rendered.template_id,
         seed=seed,
-        decoding_params={"do_sample": False, "max_new_tokens": 8, "reveal_tokens": 48},
+        decoding_params={
+            "do_sample": bool(temperature and temperature > 0.0),
+            "temperature": float(temperature),
+            "max_new_tokens": 8,
+            "reveal_tokens": 48,
+        },
         permutation=list(perm.order),
         ready_raw_output=ready_raw,
         ready_parse_ok=parse_ready(ready_raw),
@@ -271,6 +300,7 @@ def main() -> int:
             seed=seed,
             run_id=run_id,
             out_dir=out_dir,
+            temperature=args.temperature,
         )
         reveal = row["reveal_canonical_id"]
         kept = reveal in counts and counts[reveal] < args.n_per_candidate
@@ -298,30 +328,47 @@ def main() -> int:
         attempt += 1
 
     complete = min(counts.values()) >= args.n_per_candidate
-    class_ids = [cid for cid in candidate_ids if ready_states_by_cid[cid]]
+    realized_class_ids = [
+        cid for cid in candidate_ids if counts[cid] >= args.n_per_candidate
+    ]
+    partial = (not complete) and len(realized_class_ids) >= 2
     results: dict[str, Any] = {
         "model": args.model,
         "model_revision": handle.model_revision,
         "tokenizer_revision": handle.tokenizer_revision,
         "torch_dtype": args.dtype,
+        "temperature": float(args.temperature),
         "candidate_ids": list(candidate_ids),
         "question_ids": list(question_ids),
         "n_per_candidate_target": args.n_per_candidate,
         "max_attempts": args.max_attempts,
         "attempts_run": attempt,
         "complete": complete,
+        "partial_analysis_emitted": partial,
+        "realized_class_ids": realized_class_ids,
         "counts_kept_by_candidate": counts,
         "all_rows": all_rows,
         "kept_rows": kept_rows,
     }
 
-    if complete:
-        ordered_states = [state for cid in candidate_ids for state in ready_states_by_cid[cid]]
-        labels = [cid for cid in candidate_ids for _ in ready_states_by_cid[cid]]
+    if complete or partial:
+        # Balance each realized class to exactly n_per_candidate runs so NC LOO
+        # and contrast are not dominated by any one class.
+        analysis_class_ids = realized_class_ids
+        balanced_states_by_cid: dict[str, list[torch.Tensor]] = {
+            cid: ready_states_by_cid[cid][: args.n_per_candidate]
+            for cid in analysis_class_ids
+        }
+        ordered_states = [
+            state for cid in analysis_class_ids for state in balanced_states_by_cid[cid]
+        ]
+        labels = [
+            cid for cid in analysis_class_ids for _ in balanced_states_by_cid[cid]
+        ]
         ready_nc_by_layer = layerwise_loo_accuracy_nearest_centroid(
-            ordered_states, labels, list(candidate_ids)
+            ordered_states, labels, list(analysis_class_ids)
         )
-        ready_contrast = within_between_contrast(ready_states_by_cid)
+        ready_contrast = within_between_contrast(balanced_states_by_cid)
         n_layers = len(ready_nc_by_layer)
         best_layer = 13 + int(np.argmax(ready_nc_by_layer[13:])) if n_layers > 13 else int(
             np.argmax(ready_nc_by_layer)
@@ -353,7 +400,8 @@ def main() -> int:
         )
 
         results["ready_analysis"] = {
-            "class_ids": class_ids,
+            "class_ids": analysis_class_ids,
+            "n_per_class_balanced": args.n_per_candidate,
             "n_layers": n_layers,
             "nc_loo_by_layer": ready_nc_by_layer,
             "within_between": ready_contrast,
@@ -376,9 +424,17 @@ def main() -> int:
 
     print(f"  {attempt} attempts in {time.time() - started:.1f}s")
     print(f"  kept counts: {counts}")
-    if complete:
+    print(f"  realized classes: {realized_class_ids}")
+    if complete or partial:
         ready = results["ready_analysis"]
-        print("\n== Self-chosen Ready summary ==")
+        suffix = (
+            ""
+            if complete
+            else f" (PARTIAL — {len(realized_class_ids)}/{len(candidate_ids)} classes)"
+        )
+        header = f"Self-chosen Ready summary{suffix}"
+        print(f"\n== {header} ==")
+        print(f"  classes: {ready['class_ids']}")
         print(
             f"  layer {ready['post13_best_layer']} best post-13 NC: "
             f"{ready['post13_best_nc']:.2%}"
@@ -403,8 +459,8 @@ def main() -> int:
             )
     else:
         print(
-            "\nDid not reach the requested per-candidate quota. "
-            f"Wrote partial results to {out_path}",
+            "\nFewer than 2 realized classes met quota; no ready-state analysis "
+            f"emitted. Wrote raw results to {out_path}",
             file=sys.stderr,
         )
         return 1

@@ -101,15 +101,24 @@ def _build_chat_input_ids(
     return out
 
 
+def _sampling_kwargs(temperature: float) -> dict[str, Any]:
+    if temperature and temperature > 0.0:
+        return {"do_sample": True, "temperature": float(temperature)}
+    return {"do_sample": False}
+
+
 @torch.no_grad()
 def capture_ready_state(
     handle: ModelHandle,
     rendered: RenderedPrompt,
+    temperature: float = 0.0,
 ) -> tuple[torch.Tensor, str]:
     """Return (per-layer hidden states at the Ready position, raw model output).
 
     Hidden-state tensor shape: `(n_layers + 1, hidden_size)` — index 0 is the
     embedding output, index ℓ (ℓ >= 1) is the output of transformer block ℓ.
+    The captured hidden states come from a deterministic forward pass and do
+    not depend on `temperature`; only the generated Ready text does.
     """
     model_inputs = _build_chat_input_ids(handle, rendered)
     input_ids = model_inputs["input_ids"]
@@ -126,12 +135,11 @@ def capture_ready_state(
         [h[:, -1, :].squeeze(0).float().cpu() for h in outputs.hidden_states], dim=0
     )  # (n_layers + 1, hidden_size)
 
-    # Generate the actual "Ready" token(s). Short + greedy for determinism.
     gen = handle.model.generate(
         **model_inputs,
         max_new_tokens=8,
-        do_sample=False,
         pad_token_id=handle.tokenizer.eos_token_id,
+        **_sampling_kwargs(temperature),
     )
     new_tokens = gen[0, input_ids.shape[1]:]
     raw = handle.tokenizer.decode(new_tokens, skip_special_tokens=True)
@@ -154,9 +162,12 @@ def elicit_reveal(
     handle: ModelHandle,
     rendered: RenderedPrompt,
     ready_output: str,
+    temperature: float = 0.0,
 ) -> str:
     """Issue the end-of-game reveal prompt and return the raw model output."""
-    return elicit_reveal_after_turns(handle, rendered, ready_output, turns=[])
+    return elicit_reveal_after_turns(
+        handle, rendered, ready_output, turns=[], temperature=temperature
+    )
 
 
 @torch.no_grad()
@@ -165,6 +176,7 @@ def elicit_reveal_after_turns(
     rendered: RenderedPrompt,
     ready_output: str,
     turns: list[TurnRecord],
+    temperature: float = 0.0,
 ) -> str:
     """Issue the end-of-game reveal prompt after replaying prior question turns."""
     extra = [
@@ -176,8 +188,8 @@ def elicit_reveal_after_turns(
     gen = handle.model.generate(
         **model_inputs,
         max_new_tokens=48,
-        do_sample=False,
         pad_token_id=handle.tokenizer.eos_token_id,
+        **_sampling_kwargs(temperature),
     )
     new_tokens = gen[0, input_ids.shape[1]:]
     return handle.tokenizer.decode(new_tokens, skip_special_tokens=True)
@@ -230,6 +242,7 @@ def capture_question_state(
     turns: list[TurnRecord],
     question_text: str,
     answer_max_new_tokens: int = 8,
+    temperature: float = 0.0,
 ) -> tuple[torch.Tensor, str]:
     """Capture all-layer activations at the token position right before an answer."""
     extra_turns = _history_to_chat_turns(ready_output, turns)
@@ -250,8 +263,8 @@ def capture_question_state(
     gen = handle.model.generate(
         **model_inputs,
         max_new_tokens=answer_max_new_tokens,
-        do_sample=False,
         pad_token_id=handle.tokenizer.eos_token_id,
+        **_sampling_kwargs(temperature),
     )
     new_tokens = gen[0, input_ids.shape[1]:]
     raw = handle.tokenizer.decode(new_tokens, skip_special_tokens=True)
@@ -264,6 +277,7 @@ def collect_question_turns(
     ready_output: str,
     questions: list[Question],
     run_dir: Path | None = None,
+    temperature: float = 0.0,
 ) -> tuple[list[TurnRecord], dict[int, str]]:
     """Run a fixed question sequence and optionally persist per-turn activations."""
     turns: list[TurnRecord] = []
@@ -276,6 +290,7 @@ def collect_question_turns(
             ready_output=ready_output,
             turns=turns,
             question_text=question.text,
+            temperature=temperature,
         )
         turns.append(
             TurnRecord(

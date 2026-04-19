@@ -68,7 +68,9 @@ def test_collect_question_turns_records_turns_and_paths(monkeypatch, tmp_path: P
     ]
     calls: list[tuple[str, list[str]]] = []
 
-    def fake_capture_question_state(handle, rendered, ready_output, turns, question_text):
+    def fake_capture_question_state(
+        handle, rendered, ready_output, turns, question_text, temperature=0.0
+    ):
         calls.append((question_text, [t.raw_model_output for t in turns]))
         if question_text == "Is it a mammal?":
             return torch.ones(3, 4), "Yes"
