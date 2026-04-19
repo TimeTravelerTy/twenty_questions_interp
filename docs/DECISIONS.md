@@ -161,3 +161,21 @@ turn boundary, even when name retrieval from an index is correct. This is
 directly testable with a within-run cross-turn decoding comparison and is
 the most scientifically interesting branch to pursue before another prompt
 sweep.
+
+## 2026-04-19 — D-20: Bank ambiguity contributes to the binding smoke misses, but does not rescue calibration
+
+An offline rescore of the 3-condition TSUBAME run
+(`docs/progress/M3-binding-bank-audit.md`) tested the most plausible disputed
+bank cells without mutating `data/answers.csv`.
+
+The only disputed **primary** cell with a clean, consistent effect was
+`frog.has_four_legs`, because the actual surface question is
+"Does it walk primarily on four legs?" Flipping that cell from `1 -> 0`
+improves the best name-based conditions from `84.4%` to `90.6%`, but still
+leaves them well below the `>=95%` gate. Flipping `frog.lives_primarily_in_water`
+does not help consistently; it fixes one run and breaks others.
+
+Decision: do **not** opportunistically patch the canonical bank mid-M3 just to
+rescue this smoke. The bank should be revisited in a broader audit later, but
+the current calibration failure is not primarily a table problem. Move on to
+the mechanistic H-persistence test.

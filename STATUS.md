@@ -4,8 +4,8 @@
 > without reading anything else. Update the `Last updated` line on every session.
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
-**Last agent:** Claude (Opus 4.7)
-**Last updated:** 2026-04-19 (3-condition 4B binding follow-up run; all three missed the 95% gate; pivoting from prompt sweeps to representation diagnostics)
+**Last agent:** Codex (GPT-5)
+**Last updated:** 2026-04-19 (bank audit done; disputed frog cell helps a bit but calibration still misses gate)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -17,6 +17,7 @@ Do not publish calibration-only results as the headline.
 Prior notes: `docs/progress/M3-4b-smoke-diagnostics.md`,
 `docs/progress/M3-4cond-binding-smoke.md`, and the new
 **`docs/progress/M3-3cond-binding-smoke.md`** (job `7218265`).
+Bank-audit follow-up: **`docs/progress/M3-binding-bank-audit.md`**.
 
 **Result so far:** none of the three non-index prompts tried in the
 follow-up cleared the ≥95% primary gate.
@@ -28,33 +29,27 @@ follow-up cleared the ≥95% primary gate.
 - Plain within-cos remains near 1.0; within-vs-between contrast is ~10x
   larger than on the 4cond run but does not track correctness.
 
-Decision per D-19: **do not reverse D-06, do not scale**. Pivoting from
-prompt sweeps to representation diagnostics. Hypothesis tightened from
-H-binding to **H-persistence**: at 4B the instantiated-entity representation
-does not reliably persist across a chat-turn boundary even when name
-retrieval succeeds.
+Decision per D-19/D-20: **do not reverse D-06, do not scale**. The bank audit
+shows one real source of label noise (`frog.has_four_legs` under the surface
+question "Does it walk primarily on four legs?"), but even the favorable
+rescoring only lifts the best name conditions from `84.4%` to `90.6%`. The
+answer table contributes noise; it does not rescue calibration. Hypothesis
+remains **H-persistence**: at 4B the instantiated-entity representation does
+not reliably persist across a chat-turn boundary even when name retrieval
+succeeds.
 
-**Next concrete step:** two cheap probes, in this order.
+**Next concrete step:** mechanistic H-persistence test on `verbalized_index`.
 
-1. **Bank audit under D-14** against the systematic failures. Candidates
-   for review: `tiger/can_swim` (known), `eagle/can_swim` (all 6 eagle runs
-   call this true), `frog/has_four_legs`, `frog/lives_primarily_in_water`.
-   Add or remove cells per the rule in D-14 and re-score the existing
-   `runs/diag/binding_smoke_5_20260419/` JSON offline. If the revised bank
-   lifts name_paraphrase above 95%, reopen D-06 with the updated numbers
-   before doing any new remote work.
-2. **Mechanistic test of H-persistence.** Re-run `verbalized_index` once
-   on the same 4 candidates × 2 seeds, but capture two Ready states: one at
-   the end of turn 1 (model has just verbalized the name), one at the end
-   of turn 2 (normal lock-in). Fit a minimum-viable attribute probe on the
-   turn-1 states and score it on the turn-2 states. If turn-1 decodes the
-   secret attribute and turn-2 does not, H-persistence is directly measured;
-   that becomes the headline mechanistic result for M3 and the reason to
-   keep self-chosen as the only calibration regime.
-3. (Only after 1–2.) Consider a small self-chosen smoke at 4B on the same
-   primary question set, to check whether self-chosen answer behavior
-   looks closer to the name regime (~85%) or to verbalized_index (~72%).
-   This speaks directly to the blog claim.
+1. Re-run `verbalized_index` on the same 4 candidates × 2 seeds.
+2. Capture **two pre-generation states** per run:
+   - end of turn 1, immediately after the model verbalizes the secret name;
+   - end of turn 2, immediately before the standard `Ready`.
+3. Fit the minimum-viable attribute readout on the turn-1 states and score it
+   on the turn-2 states. If turn-1 looks entity-consistent and turn-2 does
+   not, H-persistence is directly measured.
+4. Only after that, consider the small self-chosen 4B smoke on the same
+   question set to see whether self-chosen behavior looks closer to the name
+   regime or to `verbalized_index`.
 
 Ground truth for scientific claims remains self-chosen. Keep publishing only
 self-chosen results as the headline.
