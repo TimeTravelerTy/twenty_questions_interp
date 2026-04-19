@@ -4,8 +4,8 @@
 > without reading anything else. Update the `Last updated` line on every session.
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
-**Last agent:** Codex (GPT-5)
-**Last updated:** 2026-04-19 (M3 local dialogue plumbing)
+**Last agent:** Claude (Opus 4.7)
+**Last updated:** 2026-04-19 (M3 diagnostics progress note landed; calibration-binding A/B up next)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -14,29 +14,49 @@ Do not publish calibration-only results as the headline.
 
 ## Next concrete step
 
-M2 closed on balance (see `docs/progress/M2-ready-smoke-test.md`). Local M3
-prep is now in place: `dialogue.py` can capture pre-answer activations on
-question turns, `RunManifest` stores per-turn activation files via
-`turn_activation_paths`, and the existing batch runners accept `--question-ids`
-to switch from Ready-only to turnful dialogues without another wrapper script.
+M2 closed on balance (see `docs/progress/M2-ready-smoke-test.md`). The 4B
+remote smoke is done and written up as a diagnostics note:
+**`docs/progress/M3-4b-smoke-diagnostics.md`**. Read that before the step
+below; it frames the calibration-binding question as a research finding
+(index-based commitment does not reliably instantiate a specific-entity
+Ready state at 4B), not just an infra hiccup.
 
-**M3 — first remote smoke on Gemma 3 4B via TSUBAME.** Use the `tsubame-ssh`
-skill for remote runs on an A100. Do a small calibration smoke before the full
-2k run:
+**Next concrete step:** run the 4-condition calibration-binding A/B and use
+it to decide whether to reverse D-06 before scaling.
 
-1. Run `scripts/run_calibration.py` on `google/gemma-3-4b-it` with a tiny slice
-   first, e.g. 2 candidates × 1 seed, plus 2–3 questions via `--question-ids`
-   such as `is_mammal,can_fly,can_swim`.
-2. Verify manifests contain populated `turns` and `turn_activation_paths`, and
-   that answers parse cleanly as bare Yes/No.
-3. If the smoke passes, scale calibration to ~100 runs per candidate (2000
-   total), keeping per-run permutation + seed logging.
-4. Re-measure the NC-vs-LR gap at 4B with more samples per class. If it
+1. Build a small remote smoke on Gemma 3 4B covering:
+   - **4 candidates** spanning categories: `tiger, eagle, frog, salmon`.
+     (The eagle `is_mammal` failure may be bird-in-mammal-heavy-list
+     specific; we need to see if it's category-general.)
+   - **5 questions**: `is_mammal, is_bird, can_fly, can_swim, has_feathers`
+     (or similar). More signal per run.
+   - **2 seeds** per (candidate × condition), so 16 runs per condition.
+   - **4 conditions**:
+     (a) current D-06 index-based prompt,
+     (b) index + explicit position reminder per turn,
+     (c) name-based ("Your secret animal is X"),
+     (d) name-based paraphrase ("You have chosen X as your secret").
+     Persist per-turn activations for all four so we can cheaply fit
+     NC/LR at Ready between variants.
+2. Score each condition on two gates, not just parse success:
+   - **answer correctness** vs. the bank (must be ≥ 95% on (c)/(d) or we
+     stop and investigate);
+   - **within-secret Ready-state cosine** (does the same secret across
+     seeds/positions collapse to a tight cluster? index vs name will be
+     the interesting comparison).
+3. Write the result into a *new* DECISIONS.md entry. If (c)/(d) pass and
+   (a)/(b) don't, reverse D-06 explicitly with a new numbered entry and
+   note the token-confound mitigation (paraphrase the binding; randomise
+   positions; later, check the last token before `Ready` isn't trivially
+   the animal's literal first BPE piece).
+4. Only after that passes, scale calibration to ~100 runs per candidate
+   (2000 total), keeping per-run permutation + seed logging.
+5. Re-measure the NC-vs-LR gap at 4B with more samples per class. If it
    persists with ~100 runs/class (where NC should be well-estimated), the
-   attribute-bundle hypothesis gains weight; if NC catches up, single-direction
-   is back on the table. Also measure LR/attribute transfer to self-chosen, not
-   just NC.
-5. Decide tiger-bias mitigation (see M2 progress note finding 4):
+   attribute-bundle hypothesis gains weight; if NC catches up, single-
+   direction is back on the table. Also measure LR/attribute transfer to
+   self-chosen, not just NC.
+6. Decide tiger-bias mitigation (see M2 progress note finding 4):
    (a) trust 4B to be more diverse, (b) add a "be diverse" nudge, or
    (c) oversample under-represented candidates in self-chosen.
 

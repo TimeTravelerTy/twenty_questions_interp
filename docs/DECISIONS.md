@@ -96,3 +96,16 @@ M2's Ready-state `activation_paths` backward-compatible while making turn-wise
 capture explicit. When constructing later turns, replay the model's **raw**
 earlier answers in the chat history, not a normalized yes/no canonicalization,
 so the captured state reflects the actual dialogue the model saw.
+
+### D-17: Do not scale M3 calibration until index-based turnful calibration is fixed
+A remote Gemma 3 4B smoke on TSUBAME/H100 confirmed the mechanics: model load,
+Ready parse, question-turn capture, and `turn_activation_paths` all work. But
+the current **index-based** calibration prompt fails semantically once question
+turns start. In the smoke, the model gave obviously wrong answers for fixed
+secrets (`eagle -> Is it a mammal? Yes`). Two diagnostics sharpened this:
+(1) stronger generic "remember the same secret" turn wording did **not** fix it;
+(2) a one-off **name-based** secret assignment did behave sensibly on the same
+questions. Provisional conclusion: the bottleneck is the index-based secret
+binding under turnful dialogue, not the activation-capture plumbing. Do not
+launch the full ~2k calibration run until the calibration prompt/condition is
+reworked and passes a remote semantic smoke test.
