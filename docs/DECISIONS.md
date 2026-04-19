@@ -109,3 +109,21 @@ questions. Provisional conclusion: the bottleneck is the index-based secret
 binding under turnful dialogue, not the activation-capture plumbing. Do not
 launch the full ~2k calibration run until the calibration prompt/condition is
 reworked and passes a remote semantic smoke test.
+
+### D-18: Do not reverse D-06 yet; the 4-condition smoke narrowed the choice but did not clear the gate
+The TSUBAME 4-condition follow-up (`docs/progress/M3-4cond-binding-smoke.md`,
+job `7217900`) made the ranking clear:
+
+- index-based conditions remain bad (`50%`, `40%`);
+- name-based conditions are much better (`90%`, `90%`).
+
+But the `STATUS.md` gate for reversing D-06 was `>=95%` answer correctness on
+the name-based conditions, and neither variant reached it. Known bank ambiguity
+(`tiger/can_swim`) explains only part of the miss; there are still genuine
+errors such as `eagle -> is_mammal: Yes` and `salmon -> is_bird: Yes`.
+
+Decision: keep D-06 unreversed for now. Run one final small binding follow-up
+before choosing the replacement calibration regime. Also, treat plain
+within-secret cosine as too saturated to use alone for this choice; use either
+within-vs-between contrast or direct NC/LR at `Ready` as the representational
+gate on the next smoke.

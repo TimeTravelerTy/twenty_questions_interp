@@ -5,7 +5,7 @@
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
 **Last agent:** Codex (GPT-5)
-**Last updated:** 2026-04-19 (4-condition binding harness added locally; TSUBAME run pending)
+**Last updated:** 2026-04-19 (4-condition 4B smoke run on TSUBAME; index failed, name improved but missed gate)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -14,51 +14,40 @@ Do not publish calibration-only results as the headline.
 
 ## Next concrete step
 
-M2 closed on balance (see `docs/progress/M2-ready-smoke-test.md`). The 4B
-remote smoke is done and written up as a diagnostics note:
-**`docs/progress/M3-4b-smoke-diagnostics.md`**. Read that before the step
-below; it frames the calibration-binding question as a research finding
-(index-based commitment does not reliably instantiate a specific-entity
-Ready state at 4B), not just an infra hiccup.
+The earlier M3 diagnostics note is at
+**`docs/progress/M3-4b-smoke-diagnostics.md`**. The completed 4-condition
+follow-up is at **`docs/progress/M3-4cond-binding-smoke.md`**.
 
-**Next concrete step:** sync and run `scripts/diagnose_index_binding.py` on
-TSUBAME, then use the result to decide whether to reverse D-06 before scaling.
+**Result so far:** the 4-condition 4B run confirms that index-based
+calibration remains unusable (`50%`, `40%`), while name-based prompts are much
+better (`90%`, `90%`) but still miss the `>=95%` gate required to reverse
+D-06. Plain within-secret cosine is too saturated to use alone; the useful
+signal is the within-vs-between Ready-state contrast.
 
-1. Build a small remote smoke on Gemma 3 4B covering:
-   - **4 candidates** spanning categories: `tiger, eagle, frog, salmon`.
-     (The eagle `is_mammal` failure may be bird-in-mammal-heavy-list
-     specific; we need to see if it's category-general.)
-   - **5 questions**: `is_mammal, is_bird, can_fly, can_swim, has_feathers`
-     (or similar). More signal per run.
-   - **2 seeds** per (candidate × condition), so 16 runs per condition.
-   - **4 conditions**:
-     (a) current D-06 index-based prompt,
-     (b) index + explicit position reminder per turn,
-     (c) name-based ("Your secret animal is X"),
-     (d) name-based paraphrase ("You have chosen X as your secret").
-     Persist per-turn activations for all four so we can cheaply fit
-     NC/LR at Ready between variants.
-2. Score each condition on two gates, not just parse success:
-   - **answer correctness** vs. the bank (must be ≥ 95% on (c)/(d) or we
-     stop and investigate);
-   - **within-secret Ready-state cosine** (does the same secret across
-     seeds/positions collapse to a tight cluster? index vs name will be
-     the interesting comparison).
-3. Write the result into a *new* DECISIONS.md entry. If (c)/(d) pass and
-   (a)/(b) don't, reverse D-06 explicitly with a new numbered entry and
-   note the token-confound mitigation (paraphrase the binding; randomise
-   positions; later, check the last token before `Ready` isn't trivially
-   the animal's literal first BPE piece).
-4. Only after that passes, scale calibration to ~100 runs per candidate
-   (2000 total), keeping per-run permutation + seed logging.
-5. Re-measure the NC-vs-LR gap at 4B with more samples per class. If it
-   persists with ~100 runs/class (where NC should be well-estimated), the
-   attribute-bundle hypothesis gains weight; if NC catches up, single-
-   direction is back on the table. Also measure LR/attribute transfer to
-   self-chosen, not just NC.
-6. Decide tiger-bias mitigation (see M2 progress note finding 4):
-   (a) trust 4B to be more diverse, (b) add a "be diverse" nudge, or
-   (c) oversample under-represented candidates in self-chosen.
+**Next concrete step:** run one final small 4B binding follow-up before
+choosing the replacement for D-06.
+
+1. Keep the same **4 candidates** and **2 seeds** as the completed smoke:
+   `tiger, eagle, frog, salmon`.
+2. Use a **non-ambiguous primary score set**:
+   `is_mammal, is_bird, can_fly, has_feathers`.
+   Report `can_swim` separately as a secondary sanity check; do not let the
+   known `tiger/can_swim` edge case dominate the decision.
+3. Compare three non-index options:
+   - current best name-based prompt,
+   - one slightly stronger name-based prompt that explicitly says to answer
+     only about the named animal, not the average animal in the list,
+   - the earlier verbalized-index control as a reserve option.
+4. Score each option on:
+   - **answer correctness** on the primary score set (must hit `>=95%`);
+   - **Ready-state separation** using within-vs-between cosine contrast or a
+     tiny NC/LR check, not plain within-secret cosine alone.
+5. If one option clears the gate, add the D-06 reversal/replacement explicitly
+   in `docs/DECISIONS.md` and then scale calibration to ~100 runs per
+   candidate. If not, stop and investigate prompt semantics before scaling.
+6. Only after the calibration regime is fixed, resume the original M3 scale-up:
+   re-measure the NC-vs-LR gap at 4B and then decide tiger-bias mitigation for
+   self-chosen.
 
 Ground truth for scientific claims remains self-chosen. Keep publishing only
 self-chosen results as the headline.
