@@ -4,8 +4,8 @@
 > without reading anything else. Update the `Last updated` line on every session.
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
-**Last agent:** Codex (GPT-5)
-**Last updated:** 2026-04-19 (4-condition 4B smoke run on TSUBAME; index failed, name improved but missed gate)
+**Last agent:** Claude (Opus 4.7)
+**Last updated:** 2026-04-19 (3-condition 4B binding follow-up run; all three missed the 95% gate; pivoting from prompt sweeps to representation diagnostics)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -14,40 +14,47 @@ Do not publish calibration-only results as the headline.
 
 ## Next concrete step
 
-The earlier M3 diagnostics note is at
-**`docs/progress/M3-4b-smoke-diagnostics.md`**. The completed 4-condition
-follow-up is at **`docs/progress/M3-4cond-binding-smoke.md`**.
+Prior notes: `docs/progress/M3-4b-smoke-diagnostics.md`,
+`docs/progress/M3-4cond-binding-smoke.md`, and the new
+**`docs/progress/M3-3cond-binding-smoke.md`** (job `7218265`).
 
-**Result so far:** the 4-condition 4B run confirms that index-based
-calibration remains unusable (`50%`, `40%`), while name-based prompts are much
-better (`90%`, `90%`) but still miss the `>=95%` gate required to reverse
-D-06. Plain within-secret cosine is too saturated to use alone; the useful
-signal is the within-vs-between Ready-state contrast.
+**Result so far:** none of the three non-index prompts tried in the
+follow-up cleared the ≥95% primary gate.
+- `name_paraphrase` 84.4%, `name_strict` 84.4%, `verbalized_index` 71.9%.
+- `verbalized_index` verbalized the correct name in 8/8 runs but still
+  drifted to candidate-list priors by Ready; `eagle.is_mammal=Yes` and
+  `eagle.can_swim=Yes` happened in every single eagle run across all
+  conditions.
+- Plain within-cos remains near 1.0; within-vs-between contrast is ~10x
+  larger than on the 4cond run but does not track correctness.
 
-**Next concrete step:** run one final small 4B binding follow-up before
-choosing the replacement for D-06.
+Decision per D-19: **do not reverse D-06, do not scale**. Pivoting from
+prompt sweeps to representation diagnostics. Hypothesis tightened from
+H-binding to **H-persistence**: at 4B the instantiated-entity representation
+does not reliably persist across a chat-turn boundary even when name
+retrieval succeeds.
 
-1. Keep the same **4 candidates** and **2 seeds** as the completed smoke:
-   `tiger, eagle, frog, salmon`.
-2. Use a **non-ambiguous primary score set**:
-   `is_mammal, is_bird, can_fly, has_feathers`.
-   Report `can_swim` separately as a secondary sanity check; do not let the
-   known `tiger/can_swim` edge case dominate the decision.
-3. Compare three non-index options:
-   - current best name-based prompt,
-   - one slightly stronger name-based prompt that explicitly says to answer
-     only about the named animal, not the average animal in the list,
-   - the earlier verbalized-index control as a reserve option.
-4. Score each option on:
-   - **answer correctness** on the primary score set (must hit `>=95%`);
-   - **Ready-state separation** using within-vs-between cosine contrast or a
-     tiny NC/LR check, not plain within-secret cosine alone.
-5. If one option clears the gate, add the D-06 reversal/replacement explicitly
-   in `docs/DECISIONS.md` and then scale calibration to ~100 runs per
-   candidate. If not, stop and investigate prompt semantics before scaling.
-6. Only after the calibration regime is fixed, resume the original M3 scale-up:
-   re-measure the NC-vs-LR gap at 4B and then decide tiger-bias mitigation for
-   self-chosen.
+**Next concrete step:** two cheap probes, in this order.
+
+1. **Bank audit under D-14** against the systematic failures. Candidates
+   for review: `tiger/can_swim` (known), `eagle/can_swim` (all 6 eagle runs
+   call this true), `frog/has_four_legs`, `frog/lives_primarily_in_water`.
+   Add or remove cells per the rule in D-14 and re-score the existing
+   `runs/diag/binding_smoke_5_20260419/` JSON offline. If the revised bank
+   lifts name_paraphrase above 95%, reopen D-06 with the updated numbers
+   before doing any new remote work.
+2. **Mechanistic test of H-persistence.** Re-run `verbalized_index` once
+   on the same 4 candidates × 2 seeds, but capture two Ready states: one at
+   the end of turn 1 (model has just verbalized the name), one at the end
+   of turn 2 (normal lock-in). Fit a minimum-viable attribute probe on the
+   turn-1 states and score it on the turn-2 states. If turn-1 decodes the
+   secret attribute and turn-2 does not, H-persistence is directly measured;
+   that becomes the headline mechanistic result for M3 and the reason to
+   keep self-chosen as the only calibration regime.
+3. (Only after 1–2.) Consider a small self-chosen smoke at 4B on the same
+   primary question set, to check whether self-chosen answer behavior
+   looks closer to the name regime (~85%) or to verbalized_index (~72%).
+   This speaks directly to the blog claim.
 
 Ground truth for scientific claims remains self-chosen. Keep publishing only
 self-chosen results as the headline.

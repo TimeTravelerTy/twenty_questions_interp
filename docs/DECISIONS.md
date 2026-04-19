@@ -127,3 +127,37 @@ before choosing the replacement calibration regime. Also, treat plain
 within-secret cosine as too saturated to use alone for this choice; use either
 within-vs-between contrast or direct NC/LR at `Ready` as the representational
 gate on the next smoke.
+
+## 2026-04-19 — D-19: Do not reverse D-06; stop and investigate representation persistence
+
+The post-4cond follow-up (3 conditions × 4 candidates × 2 seeds; primary
+question set `is_mammal,is_bird,lives_primarily_in_water,has_four_legs`;
+`docs/progress/M3-3cond-binding-smoke.md`, job `7218265`) again failed the
+≥95% primary-correctness gate:
+
+- `name_paraphrase`: 84.4%
+- `name_strict`: 84.4% (the extra "answer only about X" clause did not help
+  primary correctness and actively hurt secondary)
+- `verbalized_index`: 71.9% — and notably, despite the model verbalizing
+  the correct name from the index in all 8/8 runs, yes/no answers at
+  question time still drifted toward candidate-list priors
+
+The errors are not prompt-strength artifacts. `eagle.is_mammal=Yes` and
+`eagle.can_swim=Yes` occur in **every single eagle run** across all three
+conditions; `frog.has_four_legs=No` is systematic under name binding. These
+are specific representational failures that the calibration harness is
+surfacing.
+
+Decision: D-06 remains in effect, not because index binding is good — it is
+not — but because **no binding regime we have tried clears the gate at 4B**.
+Do not scale to ~2k. Do not switch calibration to name-based in DECISIONS
+until a regime exists that actually produces semantically valid training
+examples.
+
+Separately, this run sharpens the research hypothesis from H-binding
+("index does not instantiate") into **H-persistence**: at 4B the
+instantiated-entity representation does not reliably persist across a chat-
+turn boundary, even when name retrieval from an index is correct. This is
+directly testable with a within-run cross-turn decoding comparison and is
+the most scientifically interesting branch to pursue before another prompt
+sweep.
