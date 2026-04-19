@@ -1,19 +1,26 @@
 """Run the M3 calibration-binding smoke described in STATUS.md.
 
-This script compares four calibration conditions on the same small candidate/question
-grid:
+Six calibration conditions are defined; the default selection runs the three
+non-index variants used in the post-4cond follow-up:
 
-  A  current D-06 index-based prompt
-  B  index-based prompt + explicit per-turn position reminder
-  C  name-based prompt ("Your secret animal is X")
-  D  name-based paraphrase ("You have chosen X as your secret animal")
+  index             current D-06 index-based prompt (legacy reference)
+  index_reminder    index + explicit per-turn position reminder (legacy)
+  name              name-based ("Your secret animal is X") (legacy)
+  name_paraphrase   name paraphrase ("You have chosen X as your secret animal")
+  name_strict       name paraphrase + "answer only about X, not the average
+                    animal in the candidate list"
+  verbalized_index  two-turn binding: model first verbalizes the animal at the
+                    indexed position, then locks it in and emits Ready
 
 For each run it:
 
 - captures all-layer activations at the token position immediately before `Ready`
 - continues through fixed yes/no question turns
 - captures all-layer pre-answer activations for every turn
-- scores answer correctness against the bank
+- scores answer correctness against the bank, split into a primary set
+  (decision gate) and a secondary set (sanity reporting only)
+- summarizes Ready-state representations as both within-secret cosine and a
+  within-vs-between contrast across candidates
 
 It writes one JSON summary plus per-run activation tensors under `--out-dir`.
 The intended use is to decide whether D-06 should be reversed before launching the
@@ -48,8 +55,21 @@ from twenty_q.prompts import (
 )
 
 DEFAULT_CANDIDATES = ("tiger", "eagle", "frog", "salmon")
-DEFAULT_QUESTION_IDS = ("is_mammal", "is_bird", "can_fly", "can_swim", "has_feathers")
+DEFAULT_QUESTION_IDS = (
+    "is_mammal",
+    "is_bird",
+    "lives_primarily_in_water",
+    "has_four_legs",
+    "can_swim",
+)
+DEFAULT_PRIMARY_QUESTION_IDS = (
+    "is_mammal",
+    "is_bird",
+    "lives_primarily_in_water",
+    "has_four_legs",
+)
 DEFAULT_SEEDS = (0, 1)
+DEFAULT_CONDITION_TAGS = ("name_paraphrase", "name_strict", "verbalized_index")
 
 
 @dataclass(frozen=True)
@@ -65,6 +85,14 @@ CONDITIONS = (
     ConditionSpec(
         tag="name_paraphrase",
         label='Name paraphrase ("You have chosen X as your secret animal")',
+    ),
+    ConditionSpec(
+        tag="name_strict",
+        label='Name paraphrase + "answer only about X, not the average animal"',
+    ),
+    ConditionSpec(
+        tag="verbalized_index",
+        label="Two-turn binding: model verbalizes name from indexed position, then locks in",
     ),
 )
 
@@ -168,9 +196,40 @@ def _build_condition_prompt(
             "that same animal for the entire game. Do not state the name of the animal "
             "again. When your choice is locked in, reply with only the single word: Ready"
         )
+    elif condition.tag == "name_strict":
+        user = (
+            "Here is the list of candidate animals:\n\n"
+            f"{_candidate_list_lines(perm, display_names)}\n\n"
+            f"You have chosen {secret_display_name} as your secret animal. Keep using "
+            "that same animal for the entire game. When the adversary asks a yes/no "
+            f"question, answer it only about {secret_display_name} specifically — not "
+            "about the average animal in the candidate list, and not about a related "
+            "animal. Do not state the name of the animal again. When your choice is "
+            "locked in, reply with only the single word: Ready"
+        )
+    elif condition.tag == "verbalized_index":
+        # The first user turn used to elicit the model's verbalization of the
+        # animal at the indexed position. The second turn (lock-in + Ready) is
+        # injected by `_seed_binding_messages` once the model has spoken the
+        # name. Returning a single RenderedPrompt here would be misleading; the
+        # caller routes verbalized_index through `_seed_binding_messages`.
+        user = (
+            "Here is the list of candidate animals:\n\n"
+            f"{_candidate_list_lines(perm, display_names)}\n\n"
+            f"Your secret is the animal shown at position #{secret_displayed_index} "
+            "in the list above. First, identify which animal that is by replying "
+            "with only the animal's name on a single line — nothing else."
+        )
     else:
         raise ValueError(f"Unknown condition {condition.tag!r}")
     return RenderedPrompt(system=system, user=user)
+
+
+VERBALIZED_LOCKIN_USER = (
+    "Good. Keep that same animal as your secret for the entire game. Do not "
+    "state the name of the animal again. When your choice is locked in, reply "
+    "with only the single word: Ready"
+)
 
 
 def _question_reminder(condition: ConditionSpec, secret_displayed_index: int) -> str | None:
@@ -185,6 +244,67 @@ def _question_reminder(condition: ConditionSpec, secret_displayed_index: int) ->
 
 def _combined_user(rendered: RenderedPrompt) -> str:
     return rendered.system.strip() + "\n\n" + rendered.user.strip()
+
+
+def _generate_reply(
+    handle: ModelHandle,
+    messages: list[dict[str, str]],
+    max_new_tokens: int = 16,
+) -> str:
+    out = handle.tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        return_dict=True,
+    )
+    if hasattr(out, "to"):
+        out = out.to(handle.model.device)
+    else:
+        out = {k: v.to(handle.model.device) for k, v in out.items()}
+    input_ids = out["input_ids"]
+    with torch.no_grad():
+        gen = handle.model.generate(
+            **out,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            pad_token_id=handle.tokenizer.eos_token_id,
+        )
+    new_tokens = gen[0, input_ids.shape[1]:]
+    return handle.tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+
+
+def _seed_binding_messages(
+    handle: ModelHandle,
+    condition: ConditionSpec,
+    rendered: RenderedPrompt,
+    secret_display_name: str,
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    """Build the message list to pass to Ready capture.
+
+    For most conditions this is just the single combined-user turn. For
+    verbalized_index it additionally elicits the model's name verbalization
+    and appends the lock-in instruction so Ready capture is one turn removed
+    from the verbalized name token.
+    """
+    messages: list[dict[str, str]] = [
+        {"role": "user", "content": _combined_user(rendered)}
+    ]
+    extra: dict[str, Any] = {}
+    if condition.tag != "verbalized_index":
+        return messages, extra
+
+    raw_name = _generate_reply(handle, messages, max_new_tokens=16)
+    cleaned = raw_name.strip().splitlines()[0].strip().strip(".") if raw_name else ""
+    matches = cleaned.lower() == secret_display_name.lower()
+    extra = {
+        "verbalized_name_raw": raw_name,
+        "verbalized_name_cleaned": cleaned,
+        "verbalized_name_matches": matches,
+        "expected_name": secret_display_name,
+    }
+    messages.append({"role": "assistant", "content": raw_name})
+    messages.append({"role": "user", "content": VERBALIZED_LOCKIN_USER})
+    return messages, extra
 
 
 def _score_qa_turns(
@@ -257,7 +377,12 @@ def _run_condition(
             run_dir = out_dir / condition.tag / run_id
             run_dir.mkdir(parents=True, exist_ok=True)
 
-            messages = [{"role": "user", "content": _combined_user(rendered)}]
+            messages, binding_extra = _seed_binding_messages(
+                handle=handle,
+                condition=condition,
+                rendered=rendered,
+                secret_display_name=display_name,
+            )
             ready_activations, ready_raw = _ready_capture_and_generate(handle, messages)
             ready_act_path = run_dir / "activations.pt"
             torch.save(ready_activations, ready_act_path)
@@ -286,6 +411,7 @@ def _run_condition(
                 "ready_ok": parse_ready(ready_raw),
                 "ready_activation_path": str(ready_act_path),
                 "answers": answers,
+                "binding_extra": binding_extra,
             }
             with (run_dir / "result.json").open("w") as f:
                 json.dump(row, f, indent=2, default=str)
@@ -297,7 +423,10 @@ def _run_condition(
 
 def _cosine_summary(ready_states: dict[str, list[torch.Tensor]]) -> dict[str, Any]:
     per_candidate: dict[str, Any] = {}
-    all_pair_cosines: list[torch.Tensor] = []
+    within_pairs: list[torch.Tensor] = []
+    between_pairs: list[torch.Tensor] = []
+    cids = list(ready_states.keys())
+
     for cid, tensors in ready_states.items():
         if len(tensors) < 2:
             per_candidate[cid] = {"n_runs": len(tensors), "mean_pairwise_cosine_by_layer": []}
@@ -319,58 +448,115 @@ def _cosine_summary(ready_states: dict[str, list[torch.Tensor]]) -> dict[str, An
             "mean_pairwise_cosine_by_layer": [float(x) for x in mean_by_layer.tolist()],
             "mean_pairwise_cosine_post13": float(mean_by_layer[13:].mean().item()),
         }
-        all_pair_cosines.append(stacked)
+        within_pairs.append(stacked)
+
+    for a_idx in range(len(cids)):
+        for b_idx in range(a_idx + 1, len(cids)):
+            a_tensors = ready_states[cids[a_idx]]
+            b_tensors = ready_states[cids[b_idx]]
+            for ta in a_tensors:
+                for tb in b_tensors:
+                    between_pairs.append(
+                        torch.nn.functional.cosine_similarity(ta, tb, dim=1)
+                    )
 
     overall: dict[str, Any] = {}
-    if all_pair_cosines:
-        stacked_all = torch.cat(all_pair_cosines, dim=0)
-        mean_all = stacked_all.mean(dim=0)
-        overall = {
-            "mean_pairwise_cosine_by_layer": [float(x) for x in mean_all.tolist()],
-            "mean_pairwise_cosine_post13": float(mean_all[13:].mean().item()),
+    if within_pairs:
+        within_all = torch.cat(within_pairs, dim=0)
+        within_mean = within_all.mean(dim=0)
+        overall["within"] = {
+            "n_pairs": int(within_all.shape[0]),
+            "mean_cosine_by_layer": [float(x) for x in within_mean.tolist()],
+            "mean_cosine_post13": float(within_mean[13:].mean().item()),
+        }
+        # Back-compat aliases used by the existing 4cond progress note format.
+        overall["mean_pairwise_cosine_by_layer"] = overall["within"]["mean_cosine_by_layer"]
+        overall["mean_pairwise_cosine_post13"] = overall["within"]["mean_cosine_post13"]
+    if between_pairs:
+        between_all = torch.stack(between_pairs, dim=0)
+        between_mean = between_all.mean(dim=0)
+        overall["between"] = {
+            "n_pairs": int(between_all.shape[0]),
+            "mean_cosine_by_layer": [float(x) for x in between_mean.tolist()],
+            "mean_cosine_post13": float(between_mean[13:].mean().item()),
+        }
+    if "within" in overall and "between" in overall:
+        contrast_by_layer = [
+            w - b
+            for w, b in zip(
+                overall["within"]["mean_cosine_by_layer"],
+                overall["between"]["mean_cosine_by_layer"],
+                strict=True,
+            )
+        ]
+        overall["contrast"] = {
+            "within_minus_between_by_layer": contrast_by_layer,
+            "within_minus_between_post13": float(
+                sum(contrast_by_layer[13:]) / max(1, len(contrast_by_layer[13:]))
+            ),
         }
     return {"per_candidate": per_candidate, "overall": overall}
 
 
-def _correctness_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    total = 0
-    correct = 0
-    unparsed = 0
+def _empty_split_counts() -> dict[str, int]:
+    return {"n_questions_total": 0, "n_correct": 0, "n_unparsed": 0}
+
+
+def _split_pct(counts: dict[str, int]) -> float:
+    n = counts["n_questions_total"]
+    return counts["n_correct"] / n if n else 0.0
+
+
+def _correctness_summary(
+    rows: list[dict[str, Any]],
+    primary_question_ids: tuple[str, ...],
+) -> dict[str, Any]:
+    primary_set = set(primary_question_ids)
+    total = _empty_split_counts()
+    primary = _empty_split_counts()
+    secondary = _empty_split_counts()
     ready_ok = 0
-    per_candidate: dict[str, dict[str, int]] = {}
+    per_candidate: dict[str, dict[str, Any]] = {}
     for row in rows:
         cid = row["cid"]
-        per_candidate.setdefault(
+        cand = per_candidate.setdefault(
             cid,
-            {"n_runs": 0, "n_questions_total": 0, "n_correct": 0, "n_unparsed": 0, "n_ready_ok": 0},
+            {
+                "n_runs": 0,
+                "n_ready_ok": 0,
+                "total": _empty_split_counts(),
+                "primary": _empty_split_counts(),
+                "secondary": _empty_split_counts(),
+            },
         )
-        per_candidate[cid]["n_runs"] += 1
+        cand["n_runs"] += 1
         ready_ok += int(row["ready_ok"])
-        per_candidate[cid]["n_ready_ok"] += int(row["ready_ok"])
+        cand["n_ready_ok"] += int(row["ready_ok"])
         for ans in row["answers"]:
-            total += 1
-            per_candidate[cid]["n_questions_total"] += 1
-            if ans["correct"] is None:
-                unparsed += 1
-                per_candidate[cid]["n_unparsed"] += 1
-            elif ans["correct"]:
-                correct += 1
-                per_candidate[cid]["n_correct"] += 1
+            bucket = primary if ans["qid"] in primary_set else secondary
+            for counts in (total, bucket, cand["total"], cand[
+                "primary" if ans["qid"] in primary_set else "secondary"
+            ]):
+                counts["n_questions_total"] += 1
+                if ans["correct"] is None:
+                    counts["n_unparsed"] += 1
+                elif ans["correct"]:
+                    counts["n_correct"] += 1
+
     summary = {
         "n_runs": len(rows),
         "n_ready_ok": ready_ok,
-        "n_questions_total": total,
-        "n_correct": correct,
-        "n_unparsed": unparsed,
         "pct_ready_ok": (ready_ok / len(rows)) if rows else 0.0,
-        "pct_correct": (correct / total) if total else 0.0,
+        "primary_question_ids": list(primary_question_ids),
+        "total": {**total, "pct_correct": _split_pct(total)},
+        "primary": {**primary, "pct_correct": _split_pct(primary)},
+        "secondary": {**secondary, "pct_correct": _split_pct(secondary)},
         "per_candidate": per_candidate,
     }
     for _cid, per in per_candidate.items():
-        per["pct_correct"] = (
-            per["n_correct"] / per["n_questions_total"] if per["n_questions_total"] else 0.0
-        )
         per["pct_ready_ok"] = per["n_ready_ok"] / per["n_runs"] if per["n_runs"] else 0.0
+        for split_name in ("total", "primary", "secondary"):
+            per[split_name]["pct_correct"] = _split_pct(per[split_name])
     return summary
 
 
@@ -391,14 +577,25 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated question ids to ask after Ready.",
     )
     p.add_argument(
+        "--primary-question-ids",
+        default=",".join(DEFAULT_PRIMARY_QUESTION_IDS),
+        help=(
+            "Comma-separated subset of --question-ids that count toward the "
+            "primary correctness gate; the rest are reported as secondary only."
+        ),
+    )
+    p.add_argument(
         "--seeds",
         default=",".join(str(x) for x in DEFAULT_SEEDS),
         help="Comma-separated small integer seed indices per candidate/condition.",
     )
     p.add_argument(
         "--conditions",
-        default=",".join(c.tag for c in CONDITIONS),
-        help="Comma-separated subset of conditions: index,index_reminder,name,name_paraphrase",
+        default=",".join(DEFAULT_CONDITION_TAGS),
+        help=(
+            "Comma-separated subset of conditions. Available: "
+            f"{','.join(c.tag for c in CONDITIONS)}"
+        ),
     )
     return p.parse_args()
 
@@ -409,6 +606,9 @@ def main() -> int:
 
     candidates = tuple(x.strip() for x in args.candidates.split(",") if x.strip())
     question_ids = tuple(x.strip() for x in args.question_ids.split(",") if x.strip())
+    primary_question_ids = tuple(
+        x.strip() for x in args.primary_question_ids.split(",") if x.strip()
+    )
     seeds = tuple(int(x.strip()) for x in args.seeds.split(",") if x.strip())
     condition_lookup = {c.tag: c for c in CONDITIONS}
     selected_conditions = tuple(
@@ -423,6 +623,13 @@ def main() -> int:
     unknown_questions = sorted(set(question_ids) - set(q_lookup))
     if unknown_questions:
         print(f"Unknown question ids: {unknown_questions}", file=sys.stderr)
+        return 2
+    primary_outside_asked = sorted(set(primary_question_ids) - set(question_ids))
+    if primary_outside_asked:
+        print(
+            f"Primary question ids not in --question-ids: {primary_outside_asked}",
+            file=sys.stderr,
+        )
         return 2
     unknown_conditions = sorted(
         {
@@ -460,6 +667,7 @@ def main() -> int:
         "prompt_template_id": PROMPT_TEMPLATE_ID,
         "candidates": list(candidates),
         "question_ids": list(question_ids),
+        "primary_question_ids": list(primary_question_ids),
         "seeds": list(seeds),
         "conditions": [c.tag for c in selected_conditions],
     }
@@ -476,7 +684,7 @@ def main() -> int:
             question_ids=question_ids,
             out_dir=out_dir,
         )
-        correctness = _correctness_summary(rows)
+        correctness = _correctness_summary(rows, primary_question_ids)
         cosine = _cosine_summary(ready_states)
         results[condition.tag] = {
             "label": condition.label,
@@ -484,11 +692,18 @@ def main() -> int:
             "correctness": correctness,
             "ready_cosine": cosine,
         }
+        contrast = cosine["overall"].get("contrast", {}).get(
+            "within_minus_between_post13", float("nan")
+        )
         print(
             f"  {len(rows)} runs in {time.time() - t0:.1f}s; "
-            f"answer correctness {correctness['pct_correct']:.1%}; "
-            f"Ready post-13 cosine "
-            f"{cosine['overall'].get('mean_pairwise_cosine_post13', float('nan')):.3f}"
+            f"primary {correctness['primary']['pct_correct']:.1%} "
+            f"({correctness['primary']['n_correct']}/{correctness['primary']['n_questions_total']}); "
+            f"secondary {correctness['secondary']['pct_correct']:.1%} "
+            f"({correctness['secondary']['n_correct']}/{correctness['secondary']['n_questions_total']}); "
+            f"post-13 within-cos "
+            f"{cosine['overall'].get('mean_pairwise_cosine_post13', float('nan')):.5f}; "
+            f"post-13 within-between contrast {contrast:+.2e}"
         )
 
     out_path = out_dir / "results.json"
@@ -500,14 +715,20 @@ def main() -> int:
         payload = results[condition.tag]
         correctness = payload["correctness"]
         cosine = payload["ready_cosine"]["overall"]
+        contrast = cosine.get("contrast", {}).get(
+            "within_minus_between_post13", float("nan")
+        )
         print(
             f"  {condition.tag}: "
             f"ready {correctness['pct_ready_ok']:.1%} "
             f"({correctness['n_ready_ok']}/{correctness['n_runs']}), "
-            f"answers {correctness['pct_correct']:.1%} "
-            f"({correctness['n_correct']}/{correctness['n_questions_total']}), "
-            f"unparsed={correctness['n_unparsed']}, "
-            f"post13-cos={cosine.get('mean_pairwise_cosine_post13', float('nan')):.3f}"
+            f"primary {correctness['primary']['pct_correct']:.1%} "
+            f"({correctness['primary']['n_correct']}/{correctness['primary']['n_questions_total']}), "
+            f"secondary {correctness['secondary']['pct_correct']:.1%} "
+            f"({correctness['secondary']['n_correct']}/{correctness['secondary']['n_questions_total']}), "
+            f"unparsed={correctness['total']['n_unparsed']}, "
+            f"within-cos post13={cosine.get('mean_pairwise_cosine_post13', float('nan')):.5f}, "
+            f"contrast post13={contrast:+.2e}"
         )
     print(f"\nWrote {out_path}")
     return 0
