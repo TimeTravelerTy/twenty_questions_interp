@@ -236,3 +236,27 @@ Explicitly kept open, not closed:
   cross-state transfer. Whether name-based conditions also rotate is
   untested; if it becomes load-bearing, extend the persistence script
   to capture A for each condition.
+
+## 2026-04-19 — D-22: The self-chosen A-vs-B comparator should be a 4-candidate, reveal-labeled Ready smoke
+
+The next branch after D-21 is not a full 20-way self-chosen run. The
+question is specifically whether **self-chosen Ready** looks more like
+the persistence diagnostic's State A (strong, probe-ready entity geometry)
+or State B (still decodable identity, but rotated and amplitude-collapsed).
+
+Decision:
+
+1. Restrict the self-chosen smoke to the same 4 candidates used in
+   `diagnose_persistence.py` (`tiger,eagle,frog,salmon`) and the same
+   primary question set. This makes the geometry directly comparable and
+   keeps chance at 25% for NC LOO.
+2. Label each self-chosen run by a **post-dialogue reveal**, not by a
+   pre-question reveal. Ready-state analysis should be evaluated against
+   the secret the model says it carried through the dialogue.
+3. Run until a small quota per candidate is filled, rather than a fixed
+   number of attempts. Self-chosen choice frequencies are skewed, so a
+   flat `n` can leave one class absent and make NC LOO ill-posed.
+
+Implementation consequence: add a dedicated script
+`scripts/diagnose_selfchosen_ready.py` instead of overloading the older
+`run_selfchosen_smoke.py` runner.

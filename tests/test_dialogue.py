@@ -6,6 +6,7 @@ from twenty_q.banks import Question, load_bank
 from twenty_q.dialogue import (
     _history_to_chat_turns,
     collect_question_turns,
+    elicit_reveal_after_turns,
     parse_ready,
     parse_reveal_to_canonical,
     parse_yes_no,
@@ -95,3 +96,55 @@ def test_collect_question_turns_records_turns_and_paths(monkeypatch, tmp_path: P
     assert set(turn_paths) == {1, 2}
     for path in turn_paths.values():
         assert Path(path).exists()
+
+
+def test_elicit_reveal_after_turns_replays_history(monkeypatch):
+    captured = {}
+
+    def fake_build_chat_input_ids(handle, rendered, extra_turns=None):
+        captured["extra_turns"] = extra_turns
+        return {"input_ids": torch.tensor([[11, 12]])}
+
+    class FakeModel:
+        device = "cpu"
+
+        def generate(self, **kwargs):
+            return torch.tensor([[11, 12, 99]])
+
+    class FakeTokenizer:
+        eos_token_id = 0
+
+        def decode(self, tokens, skip_special_tokens=True):
+            assert tokens.tolist() == [99]
+            return "tiger"
+
+    monkeypatch.setattr("twenty_q.dialogue._build_chat_input_ids", fake_build_chat_input_ids)
+
+    turns = [
+        TurnRecord(
+            question_id="is_mammal",
+            question_text="Is it a mammal?",
+            raw_model_output="Yes",
+            answer_bool=True,
+        )
+    ]
+    raw = elicit_reveal_after_turns(
+        handle=type("Handle", (), {"model": FakeModel(), "tokenizer": FakeTokenizer()})(),
+        rendered=RenderedPrompt(system="system", user="user"),
+        ready_output="Ready",
+        turns=turns,
+    )
+
+    assert raw == "tiger"
+    assert captured["extra_turns"] == [
+        {"role": "assistant", "content": "Ready"},
+        {"role": "user", "content": "Is it a mammal?\nReply with only one word: Yes or No"},
+        {"role": "assistant", "content": "Yes"},
+        {
+            "role": "user",
+            "content": (
+                "The game is now over. Please reveal the single animal you had been using "
+                "as your secret. Reply with only the name of that animal."
+            ),
+        },
+    ]

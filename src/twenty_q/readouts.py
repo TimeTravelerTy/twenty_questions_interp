@@ -11,9 +11,12 @@ Three decoder flavors per layer (DECISIONS.md D-11):
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
+import torch
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
@@ -103,3 +106,78 @@ def loo_accuracy_binary(
         pred = clf.predict(scaler.transform(X[i : i + 1]))[0]
         correct += int(pred == yarr[i])
     return correct / n, float(majority)
+
+
+def layerwise_loo_accuracy_nearest_centroid(
+    states: Sequence[torch.Tensor],
+    labels: list[str],
+    class_ids: list[str],
+) -> list[float]:
+    n_layers = states[0].shape[0]
+    accs: list[float] = []
+    for ell in range(n_layers):
+        X = np.stack([t[ell].numpy() for t in states], axis=0)
+        accs.append(loo_accuracy_nearest_centroid(X, labels, class_ids))
+    return accs
+
+
+def layerwise_cross_nearest_centroid(
+    states_src: Sequence[torch.Tensor],
+    labels_src: list[str],
+    states_tgt: Sequence[torch.Tensor],
+    labels_tgt: list[str],
+    class_ids: list[str],
+) -> list[float]:
+    n_layers = states_src[0].shape[0]
+    accs: list[float] = []
+    for ell in range(n_layers):
+        Xs = np.stack([t[ell].numpy() for t in states_src], axis=0)
+        Xt = np.stack([t[ell].numpy() for t in states_tgt], axis=0)
+        dec = fit_nearest_centroid(Xs, labels_src, class_ids)
+        pred = dec.predict(Xt)
+        correct = sum(1 for p, y in zip(pred, labels_tgt, strict=True) if p == y)
+        accs.append(correct / len(labels_tgt))
+    return accs
+
+
+def within_between_contrast(
+    states_by_class: dict[str, Sequence[torch.Tensor]],
+) -> dict[str, Any]:
+    """Layerwise within-vs-between cosine contrast plus a post-L13 summary."""
+    class_ids = list(states_by_class.keys())
+    within_pairs: list[torch.Tensor] = []
+    between_pairs: list[torch.Tensor] = []
+    for tensors in states_by_class.values():
+        for i in range(len(tensors)):
+            for j in range(i + 1, len(tensors)):
+                within_pairs.append(
+                    torch.nn.functional.cosine_similarity(
+                        tensors[i], tensors[j], dim=1
+                    )
+                )
+    for a_idx in range(len(class_ids)):
+        for b_idx in range(a_idx + 1, len(class_ids)):
+            for ta in states_by_class[class_ids[a_idx]]:
+                for tb in states_by_class[class_ids[b_idx]]:
+                    between_pairs.append(
+                        torch.nn.functional.cosine_similarity(ta, tb, dim=1)
+                    )
+
+    result: dict[str, Any] = {}
+    if within_pairs:
+        within = torch.stack(within_pairs, dim=0).mean(dim=0)
+        result["within_by_layer"] = [float(x) for x in within.tolist()]
+    if between_pairs:
+        between = torch.stack(between_pairs, dim=0).mean(dim=0)
+        result["between_by_layer"] = [float(x) for x in between.tolist()]
+    if "within_by_layer" in result and "between_by_layer" in result:
+        contrast = [
+            w - b
+            for w, b in zip(
+                result["within_by_layer"], result["between_by_layer"], strict=True
+            )
+        ]
+        result["contrast_by_layer"] = contrast
+        post13 = contrast[13:]
+        result["contrast_post13"] = float(sum(post13) / max(1, len(post13)))
+    return result

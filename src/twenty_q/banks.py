@@ -145,6 +145,34 @@ def load_bank(
     return Bank(candidates=candidates, questions=questions, answers=answers)
 
 
+def subset_bank(
+    bank: Bank,
+    candidate_ids: tuple[str, ...] | list[str] | None = None,
+    question_ids: tuple[str, ...] | list[str] | None = None,
+) -> Bank:
+    """Return a Bank restricted to the requested candidates/questions."""
+    candidate_ids = tuple(candidate_ids or bank.candidate_ids)
+    question_ids = tuple(question_ids or bank.question_ids)
+
+    candidate_lookup = {c.id: c for c in bank.candidates}
+    question_lookup = {q.id: q for q in bank.questions}
+
+    unknown_candidates = [cid for cid in candidate_ids if cid not in candidate_lookup]
+    if unknown_candidates:
+        raise ValueError(f"Unknown candidate ids: {unknown_candidates}")
+    unknown_questions = [qid for qid in question_ids if qid not in question_lookup]
+    if unknown_questions:
+        raise ValueError(f"Unknown question ids: {unknown_questions}")
+
+    candidates = tuple(candidate_lookup[cid] for cid in candidate_ids)
+    questions = tuple(question_lookup[qid] for qid in question_ids)
+    answers = {
+        cid: {qid: bank.answers[cid][qid] for qid in question_ids}
+        for cid in candidate_ids
+    }
+    return Bank(candidates=candidates, questions=questions, answers=answers)
+
+
 def feasible_set(
     bank: Bank,
     history: list[tuple[str, int]],

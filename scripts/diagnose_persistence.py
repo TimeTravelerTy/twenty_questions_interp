@@ -48,7 +48,11 @@ from twenty_q.config import MODEL_MAIN
 from twenty_q.dialogue import ModelHandle, load_model, parse_ready, parse_yes_no
 from twenty_q.permutations import Permutation, shuffle_candidates
 from twenty_q.prompts import PROMPT_TEMPLATE_ID, question_turn_prompt
-from twenty_q.readouts import fit_nearest_centroid, loo_accuracy_nearest_centroid
+from twenty_q.readouts import (
+    layerwise_cross_nearest_centroid,
+    layerwise_loo_accuracy_nearest_centroid,
+    within_between_contrast,
+)
 
 DEFAULT_CANDIDATES = ("tiger", "eagle", "frog", "salmon")
 DEFAULT_PRIMARY_QUESTION_IDS = (
@@ -258,78 +262,6 @@ def _run_one(
     return record
 
 
-def _within_between_contrast(
-    states_by_cid: dict[str, list[torch.Tensor]],
-) -> dict[str, Any]:
-    """Layerwise within-vs-between cosine contrast + overall post-13."""
-    cids = list(states_by_cid.keys())
-    within_pairs: list[torch.Tensor] = []
-    between_pairs: list[torch.Tensor] = []
-    for tensors in states_by_cid.values():
-        for i in range(len(tensors)):
-            for j in range(i + 1, len(tensors)):
-                within_pairs.append(
-                    torch.nn.functional.cosine_similarity(
-                        tensors[i], tensors[j], dim=1
-                    )
-                )
-    for a_idx in range(len(cids)):
-        for b_idx in range(a_idx + 1, len(cids)):
-            for ta in states_by_cid[cids[a_idx]]:
-                for tb in states_by_cid[cids[b_idx]]:
-                    between_pairs.append(
-                        torch.nn.functional.cosine_similarity(ta, tb, dim=1)
-                    )
-    result: dict[str, Any] = {}
-    if within_pairs:
-        within = torch.stack(within_pairs, dim=0).mean(dim=0)
-        result["within_by_layer"] = [float(x) for x in within.tolist()]
-    if between_pairs:
-        between = torch.stack(between_pairs, dim=0).mean(dim=0)
-        result["between_by_layer"] = [float(x) for x in between.tolist()]
-    if "within_by_layer" in result and "between_by_layer" in result:
-        contrast = [
-            w - b
-            for w, b in zip(
-                result["within_by_layer"], result["between_by_layer"], strict=True
-            )
-        ]
-        result["contrast_by_layer"] = contrast
-        post13 = contrast[13:]
-        result["contrast_post13"] = float(sum(post13) / max(1, len(post13)))
-    return result
-
-
-def _layerwise_nc_loo(
-    states: list[torch.Tensor], labels: list[str], class_ids: list[str]
-) -> list[float]:
-    n_layers = states[0].shape[0]
-    accs: list[float] = []
-    for ell in range(n_layers):
-        X = np.stack([t[ell].numpy() for t in states], axis=0)
-        accs.append(loo_accuracy_nearest_centroid(X, labels, class_ids))
-    return accs
-
-
-def _layerwise_cross(
-    states_src: list[torch.Tensor],
-    labels_src: list[str],
-    states_tgt: list[torch.Tensor],
-    labels_tgt: list[str],
-    class_ids: list[str],
-) -> list[float]:
-    n_layers = states_src[0].shape[0]
-    accs: list[float] = []
-    for ell in range(n_layers):
-        Xs = np.stack([t[ell].numpy() for t in states_src], axis=0)
-        Xt = np.stack([t[ell].numpy() for t in states_tgt], axis=0)
-        dec = fit_nearest_centroid(Xs, labels_src, class_ids)
-        pred = dec.predict(Xt)
-        correct = sum(1 for p, y in zip(pred, labels_tgt, strict=True) if p == y)
-        accs.append(correct / len(labels_tgt))
-    return accs
-
-
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--model", default=MODEL_MAIN)
@@ -406,12 +338,14 @@ def main() -> int:
     ordered_b = [t for cid in class_ids for t in states_b.get(cid, [])]
     labels = [cid for cid in class_ids for _ in states_a.get(cid, [])]
 
-    nc_a = _layerwise_nc_loo(ordered_a, labels, class_ids)
-    nc_b = _layerwise_nc_loo(ordered_b, labels, class_ids)
-    cross_a_to_b = _layerwise_cross(ordered_a, labels, ordered_b, labels, class_ids)
+    nc_a = layerwise_loo_accuracy_nearest_centroid(ordered_a, labels, class_ids)
+    nc_b = layerwise_loo_accuracy_nearest_centroid(ordered_b, labels, class_ids)
+    cross_a_to_b = layerwise_cross_nearest_centroid(
+        ordered_a, labels, ordered_b, labels, class_ids
+    )
 
-    contrast_a = _within_between_contrast(states_a)
-    contrast_b = _within_between_contrast(states_b)
+    contrast_a = within_between_contrast(states_a)
+    contrast_b = within_between_contrast(states_b)
 
     # Correctness cross-check (per candidate + overall).
     n_total = 0

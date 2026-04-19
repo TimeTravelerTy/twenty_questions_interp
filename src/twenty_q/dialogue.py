@@ -156,8 +156,19 @@ def elicit_reveal(
     ready_output: str,
 ) -> str:
     """Issue the end-of-game reveal prompt and return the raw model output."""
+    return elicit_reveal_after_turns(handle, rendered, ready_output, turns=[])
+
+
+@torch.no_grad()
+def elicit_reveal_after_turns(
+    handle: ModelHandle,
+    rendered: RenderedPrompt,
+    ready_output: str,
+    turns: list[TurnRecord],
+) -> str:
+    """Issue the end-of-game reveal prompt after replaying prior question turns."""
     extra = [
-        {"role": "assistant", "content": ready_output.strip()},
+        *_history_to_chat_turns(ready_output, turns),
         {"role": "user", "content": REVEAL_USER_MESSAGE},
     ]
     model_inputs = _build_chat_input_ids(handle, rendered, extra_turns=extra)

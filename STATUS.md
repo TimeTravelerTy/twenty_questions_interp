@@ -4,8 +4,8 @@
 > without reading anything else. Update the `Last updated` line on every session.
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
-**Last agent:** Claude (Opus 4.7)
-**Last updated:** 2026-04-19 (H-persistence test done; replaced by H-rotation: entity is still NC-decodable at turn 2, but geometry rotates and amplitude collapses ~25x)
+**Last agent:** Codex
+**Last updated:** 2026-04-19 (added `scripts/diagnose_selfchosen_ready.py` to run the 4-candidate self-chosen Ready-state comparator against persistence State A vs B)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -38,18 +38,16 @@ persists across the chat-turn boundary, but the geometry rotates and the
 amplitude collapses. Attribute readouts trained at A would not transfer to
 B — which is exactly what explains the answer drift.
 
-**Next concrete step:** small self-chosen 4B smoke on the same primary
-question set to decide which regime self-chosen resembles.
+**Next concrete step:** run the dedicated self-chosen 4B Ready-state smoke
+and compare it against persistence State A vs B.
 
-1. Use the existing `scripts/run_selfchosen_smoke.py` (or a thin
-   persistence-style variant of it) on `google/gemma-3-4b-it`.
-2. Use the same 4 candidates and the primary question set
-   (`is_mammal, is_bird, lives_primarily_in_water, has_four_legs`).
-3. Capture the Ready-state activations per run. Compute within-vs-between
-   contrast and NC LOO across the 4 "implicit" secrets the model chose.
-4. Compare: does self-chosen Ready look like State A (clean,
-   high-contrast, probe-ready) or State B (decodable identity but
-   collapsed amplitude)?
+1. On TSUBAME, run:
+   `uv run python scripts/diagnose_selfchosen_ready.py --model google/gemma-3-4b-it --device auto --dtype bfloat16 --n-per-candidate 2 --max-attempts 40 --out-dir runs/diag/selfchosen_ready_smoke --persistence-results runs/diag/persistence_smoke/results.json`
+2. Read `runs/diag/selfchosen_ready_smoke/results.json`.
+3. Check `ready_analysis.comparison_to_persistence.overall`:
+   `state_a` means the readout pipeline is likely unblocked at Ready;
+   `state_b` means the blog story has to center on decodable-but-rotated
+   latents; `mixed` means we need a slightly larger smoke before scaling.
 
 If self-chosen looks like A: the readout pipeline is unblocked; pick a
 layer, scale the calibration, move to M3 full. If self-chosen looks like
