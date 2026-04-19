@@ -54,7 +54,7 @@ def load_model(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        torch_dtype=dtype,
+        dtype=dtype,
         device_map=device,
     )
     model.eval()
@@ -76,7 +76,7 @@ def _build_chat_input_ids(
     handle: ModelHandle,
     rendered: RenderedPrompt,
     extra_turns: list[dict[str, str]] | None = None,
-) -> torch.Tensor:
+) -> dict[str, torch.Tensor]:
     """Apply the tokenizer's chat template with an assistant-turn prefix.
 
     Some models (Gemma 3 included) do not accept a 'system' role — fold the
@@ -90,15 +90,15 @@ def _build_chat_input_ids(
         messages,
         add_generation_prompt=True,
         return_tensors="pt",
+        return_dict=True,
     )
-    # Newer transformers may return a BatchEncoding; older returns a tensor.
-    if hasattr(out, "input_ids"):
-        input_ids = out.input_ids
+    if hasattr(out, "to"):
+        out = out.to(handle.model.device)
     elif isinstance(out, dict):
-        input_ids = out["input_ids"]
+        out = {k: v.to(handle.model.device) for k, v in out.items()}
     else:
-        input_ids = out
-    return input_ids.to(handle.model.device)
+        out = {"input_ids": out.to(handle.model.device)}
+    return out
 
 
 @torch.no_grad()
@@ -111,11 +111,12 @@ def capture_ready_state(
     Hidden-state tensor shape: `(n_layers + 1, hidden_size)` — index 0 is the
     embedding output, index ℓ (ℓ >= 1) is the output of transformer block ℓ.
     """
-    input_ids = _build_chat_input_ids(handle, rendered)
+    model_inputs = _build_chat_input_ids(handle, rendered)
+    input_ids = model_inputs["input_ids"]
 
     # One forward pass to grab hidden states at the last input position.
     outputs = handle.model(
-        input_ids=input_ids,
+        **model_inputs,
         output_hidden_states=True,
         return_dict=True,
         use_cache=False,
@@ -127,7 +128,7 @@ def capture_ready_state(
 
     # Generate the actual "Ready" token(s). Short + greedy for determinism.
     gen = handle.model.generate(
-        input_ids=input_ids,
+        **model_inputs,
         max_new_tokens=8,
         do_sample=False,
         pad_token_id=handle.tokenizer.eos_token_id,
@@ -159,9 +160,10 @@ def elicit_reveal(
         {"role": "assistant", "content": ready_output.strip()},
         {"role": "user", "content": REVEAL_USER_MESSAGE},
     ]
-    input_ids = _build_chat_input_ids(handle, rendered, extra_turns=extra)
+    model_inputs = _build_chat_input_ids(handle, rendered, extra_turns=extra)
+    input_ids = model_inputs["input_ids"]
     gen = handle.model.generate(
-        input_ids=input_ids,
+        **model_inputs,
         max_new_tokens=48,
         do_sample=False,
         pad_token_id=handle.tokenizer.eos_token_id,
@@ -221,10 +223,11 @@ def capture_question_state(
     """Capture all-layer activations at the token position right before an answer."""
     extra_turns = _history_to_chat_turns(ready_output, turns)
     extra_turns.append({"role": "user", "content": question_turn_prompt(question_text)})
-    input_ids = _build_chat_input_ids(handle, rendered, extra_turns=extra_turns)
+    model_inputs = _build_chat_input_ids(handle, rendered, extra_turns=extra_turns)
+    input_ids = model_inputs["input_ids"]
 
     outputs = handle.model(
-        input_ids=input_ids,
+        **model_inputs,
         output_hidden_states=True,
         return_dict=True,
         use_cache=False,
@@ -234,7 +237,7 @@ def capture_question_state(
     )
 
     gen = handle.model.generate(
-        input_ids=input_ids,
+        **model_inputs,
         max_new_tokens=answer_max_new_tokens,
         do_sample=False,
         pad_token_id=handle.tokenizer.eos_token_id,
