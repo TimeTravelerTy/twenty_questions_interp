@@ -4,8 +4,8 @@
 > without reading anything else. Update the `Last updated` line on every session.
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
-**Last agent:** Claude (Opus 4.7)
-**Last updated:** 2026-04-19 (M3 diagnostics progress note landed; calibration-binding A/B up next)
+**Last agent:** Codex (GPT-5)
+**Last updated:** 2026-04-19 (4-condition binding harness added locally; TSUBAME run pending)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -21,8 +21,8 @@ below; it frames the calibration-binding question as a research finding
 (index-based commitment does not reliably instantiate a specific-entity
 Ready state at 4B), not just an infra hiccup.
 
-**Next concrete step:** run the 4-condition calibration-binding A/B and use
-it to decide whether to reverse D-06 before scaling.
+**Next concrete step:** sync and run `scripts/diagnose_index_binding.py` on
+TSUBAME, then use the result to decide whether to reverse D-06 before scaling.
 
 1. Build a small remote smoke on Gemma 3 4B covering:
    - **4 candidates** spanning categories: `tiger, eagle, frog, salmon`.

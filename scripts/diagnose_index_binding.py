@@ -1,26 +1,27 @@
-"""Diagnose whether index-based calibration binds a specific entity at 4B.
+"""Run the M3 calibration-binding smoke described in STATUS.md.
 
-Runs three conditions end-to-end on the same seeds:
+This script compares four calibration conditions on the same small candidate/question
+grid:
 
-  A  bare retrieval (no secrecy): "Here is the list... what animal is at
-     position #N?" Does the model retrieve the right name? Cheapest possible
-     check that position indexing works at all.
+  A  current D-06 index-based prompt
+  B  index-based prompt + explicit per-turn position reminder
+  C  name-based prompt ("Your secret animal is X")
+  D  name-based paraphrase ("You have chosen X as your secret animal")
 
-  B  verbalized index binding: same index framing, but the model is asked to
-     *state the animal at position #N* in an assistant turn before being told
-     to commit and say Ready. The name enters the attention trail but the
-     index framing is preserved. If this passes answer-correctness it keeps
-     D-06's intent alive.
+For each run it:
 
-  C  current D-06 prompt: baseline.
+- captures all-layer activations at the token position immediately before `Ready`
+- continues through fixed yes/no question turns
+- captures all-layer pre-answer activations for every turn
+- scores answer correctness against the bank
 
-Scoring gate: answer correctness vs. the bank. No activation capture — this
-script is choosing *which* calibration condition to train probes with, not
-training probes. Writes a single JSON summary under the provided --out-dir.
+It writes one JSON summary plus per-run activation tensors under `--out-dir`.
+The intended use is to decide whether D-06 should be reversed before launching the
+full ~2k M3 calibration run.
 
 Usage:
-    uv run python scripts/diagnose_index_binding.py \\
-        --model google/gemma-3-4b-it --out-dir runs/diag/binding_smoke
+    uv run python scripts/diagnose_index_binding.py \
+        --model google/gemma-3-4b-it --device auto
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ import hashlib
 import json
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -40,13 +42,31 @@ from twenty_q.dialogue import ModelHandle, load_model, parse_ready, parse_yes_no
 from twenty_q.permutations import Permutation, shuffle_candidates
 from twenty_q.prompts import (
     PROMPT_TEMPLATE_ID,
+    RenderedPrompt,
     calibration_prompt,
     question_turn_prompt,
 )
 
-CANDIDATES = ("tiger", "eagle", "frog", "salmon")
-QUESTION_IDS = ("is_mammal", "is_bird", "can_fly", "can_swim", "has_feathers")
-SEEDS = (0, 1)
+DEFAULT_CANDIDATES = ("tiger", "eagle", "frog", "salmon")
+DEFAULT_QUESTION_IDS = ("is_mammal", "is_bird", "can_fly", "can_swim", "has_feathers")
+DEFAULT_SEEDS = (0, 1)
+
+
+@dataclass(frozen=True)
+class ConditionSpec:
+    tag: str
+    label: str
+
+
+CONDITIONS = (
+    ConditionSpec(tag="index", label="Current D-06 index binding"),
+    ConditionSpec(tag="index_reminder", label="Index binding + explicit position reminder"),
+    ConditionSpec(tag="name", label='Name binding ("Your secret animal is X")'),
+    ConditionSpec(
+        tag="name_paraphrase",
+        label='Name paraphrase ("You have chosen X as your secret animal")',
+    ),
+)
 
 
 def _seed_for(tag: str, cid: str, k: int) -> int:
@@ -54,7 +74,17 @@ def _seed_for(tag: str, cid: str, k: int) -> int:
     return int.from_bytes(digest[:4], "big")
 
 
-def _generate(handle: ModelHandle, messages: list[dict[str, str]], max_new: int) -> str:
+def _candidate_list_lines(perm: Permutation, display_names: dict[str, str]) -> str:
+    return "\n".join(
+        f"{i}. {display_names[cid]}" for i, cid in enumerate(perm.order, start=1)
+    )
+
+
+def _ready_capture_and_generate(
+    handle: ModelHandle,
+    messages: list[dict[str, str]],
+    max_new_tokens: int = 8,
+) -> tuple[torch.Tensor, str]:
     out = handle.tokenizer.apply_chat_template(
         messages,
         add_generation_prompt=True,
@@ -65,49 +95,96 @@ def _generate(handle: ModelHandle, messages: list[dict[str, str]], max_new: int)
         out = out.to(handle.model.device)
     else:
         out = {k: v.to(handle.model.device) for k, v in out.items()}
+    input_ids = out["input_ids"]
+
     with torch.no_grad():
+        outputs = handle.model(
+            **out,
+            output_hidden_states=True,
+            return_dict=True,
+            use_cache=False,
+        )
+        states = torch.stack(
+            [h[:, -1, :].squeeze(0).float().cpu() for h in outputs.hidden_states],
+            dim=0,
+        )
         gen = handle.model.generate(
             **out,
-            max_new_tokens=max_new,
+            max_new_tokens=max_new_tokens,
             do_sample=False,
             pad_token_id=handle.tokenizer.eos_token_id,
         )
-    new_tokens = gen[0, out["input_ids"].shape[1]:]
-    return handle.tokenizer.decode(new_tokens, skip_special_tokens=True)
+    new_tokens = gen[0, input_ids.shape[1]:]
+    raw = handle.tokenizer.decode(new_tokens, skip_special_tokens=True)
+    return states, raw
 
 
-def _candidate_list_lines(perm: Permutation, display_names: dict[str, str]) -> str:
-    return "\n".join(
-        f"{i}. {display_names[cid]}" for i, cid in enumerate(perm.order, start=1)
+def _question_prompt(question_text: str, reminder: str | None = None) -> str:
+    base = question_turn_prompt(question_text)
+    if reminder is None:
+        return base
+    return f"{reminder.strip()}\n\n{base}"
+
+
+def _build_condition_prompt(
+    condition: ConditionSpec,
+    perm: Permutation,
+    display_names: dict[str, str],
+    secret_displayed_index: int,
+    secret_display_name: str,
+) -> RenderedPrompt:
+    if condition.tag == "index":
+        return calibration_prompt(perm, display_names, secret_displayed_index)
+
+    system = (
+        "You are playing a 20-Questions-style game. An adversary will ask you "
+        "yes/no questions about a single secret animal that you are holding in "
+        "mind. You must answer each question truthfully and concisely with "
+        "either 'Yes' or 'No' about the secret animal. Do not reveal the "
+        "identity of the secret animal under any circumstances."
     )
+    if condition.tag == "index_reminder":
+        user = (
+            "Here is the list of candidate animals:\n\n"
+            f"{_candidate_list_lines(perm, display_names)}\n\n"
+            f"Your secret is the animal shown at position #{secret_displayed_index} "
+            "in the list above. Keep that choice fixed and secret for the entire "
+            "game. Do not state the name of the animal. When your choice is locked "
+            "in, reply with only the single word: Ready"
+        )
+    elif condition.tag == "name":
+        user = (
+            "Here is the list of candidate animals:\n\n"
+            f"{_candidate_list_lines(perm, display_names)}\n\n"
+            f"Your secret animal is {secret_display_name}. Keep that choice fixed "
+            "and secret for the entire game. Do not state the name of the animal "
+            "again. When your choice is locked in, reply with only the single word: Ready"
+        )
+    elif condition.tag == "name_paraphrase":
+        user = (
+            "Here is the list of candidate animals:\n\n"
+            f"{_candidate_list_lines(perm, display_names)}\n\n"
+            f"You have chosen {secret_display_name} as your secret animal. Keep using "
+            "that same animal for the entire game. Do not state the name of the animal "
+            "again. When your choice is locked in, reply with only the single word: Ready"
+        )
+    else:
+        raise ValueError(f"Unknown condition {condition.tag!r}")
+    return RenderedPrompt(system=system, user=user)
 
 
-def run_condition_A(handle: ModelHandle, bank: Bank, perms: list[Permutation]) -> list[dict[str, Any]]:
-    display_names = {c.id: c.display for c in bank.candidates}
-    results: list[dict[str, Any]] = []
-    for perm_idx, perm in enumerate(perms):
-        lines = _candidate_list_lines(perm, display_names)
-        for position in range(1, len(perm.order) + 1):
-            target_canonical = perm.canonical_at(position)
-            target_display = display_names[target_canonical]
-            user = (
-                "Here is a list of animals:\n\n"
-                f"{lines}\n\n"
-                f"What animal is at position #{position}? Reply with only the animal's name."
-            )
-            raw = _generate(handle, [{"role": "user", "content": user}], max_new=16)
-            hit = target_display.lower() in raw.lower()
-            results.append(
-                {
-                    "perm_idx": perm_idx,
-                    "position": position,
-                    "target_canonical": target_canonical,
-                    "target_display": target_display,
-                    "raw": raw,
-                    "hit": hit,
-                }
-            )
-    return results
+def _question_reminder(condition: ConditionSpec, secret_displayed_index: int) -> str | None:
+    if condition.tag == "index_reminder":
+        return (
+            "Remember: your secret is the animal at position "
+            f"#{secret_displayed_index} from the original candidate list. "
+            "Answer only about that animal."
+        )
+    return None
+
+
+def _combined_user(rendered: RenderedPrompt) -> str:
+    return rendered.system.strip() + "\n\n" + rendered.user.strip()
 
 
 def _score_qa_turns(
@@ -116,144 +193,185 @@ def _score_qa_turns(
     messages: list[dict[str, str]],
     secret_canonical_id: str,
     question_ids: tuple[str, ...],
+    reminder: str | None,
+    run_dir: Path,
 ) -> list[dict[str, Any]]:
     q_lookup = {q.id: q for q in bank.questions}
     answers: list[dict[str, Any]] = []
-    for qid in question_ids:
+    for turn_idx, qid in enumerate(question_ids, start=1):
         q = q_lookup[qid]
-        messages.append({"role": "user", "content": question_turn_prompt(q.text)})
-        ans_raw = _generate(handle, messages, max_new=8)
+        user_content = _question_prompt(q.text, reminder=reminder)
+        messages.append({"role": "user", "content": user_content})
+        activations, ans_raw = _ready_capture_and_generate(
+            handle,
+            messages,
+            max_new_tokens=8,
+        )
+        act_path = run_dir / f"turn_{turn_idx:02d}_activations.pt"
+        torch.save(activations, act_path)
         messages.append({"role": "assistant", "content": ans_raw.strip()})
         parsed = parse_yes_no(ans_raw)
         bank_answer = bool(bank.answer(secret_canonical_id, qid))
         answers.append(
             {
                 "qid": qid,
+                "question_text": q.text,
                 "raw": ans_raw,
                 "parsed": parsed,
                 "bank": bank_answer,
                 "correct": (parsed == bank_answer) if parsed is not None else None,
+                "activation_path": str(act_path),
             }
         )
     return answers
 
 
-def run_condition_B(
-    handle: ModelHandle, bank: Bank, candidates: tuple[str, ...], seeds: tuple[int, ...]
-) -> list[dict[str, Any]]:
+def _run_condition(
+    handle: ModelHandle,
+    bank: Bank,
+    condition: ConditionSpec,
+    candidates: tuple[str, ...],
+    seeds: tuple[int, ...],
+    question_ids: tuple[str, ...],
+    out_dir: Path,
+) -> tuple[list[dict[str, Any]], dict[str, list[torch.Tensor]]]:
     display_names = {c.id: c.display for c in bank.candidates}
-    results: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    ready_states: dict[str, list[torch.Tensor]] = {}
+
     for cid in candidates:
         for k in seeds:
-            seed = _seed_for("B", cid, k)
+            seed = _seed_for(condition.tag, cid, k)
             perm = shuffle_candidates(bank.candidate_ids, seed=seed)
             pos = perm.displayed_index(cid)
-            lines = _candidate_list_lines(perm, display_names)
-            user1 = (
-                "You are playing a 20-Questions-style game. An adversary will ask "
-                "you yes/no questions about a single secret animal.\n\n"
-                "Here is the list of candidate animals:\n\n"
-                f"{lines}\n\n"
-                f"Your secret is the animal at position #{pos}. First, reply with "
-                "only the name of that animal so we can confirm you read the "
-                "position correctly."
+            display_name = display_names[cid]
+            rendered = _build_condition_prompt(
+                condition=condition,
+                perm=perm,
+                display_names=display_names,
+                secret_displayed_index=pos,
+                secret_display_name=display_name,
             )
-            messages: list[dict[str, str]] = [{"role": "user", "content": user1}]
-            name_raw = _generate(handle, messages, max_new=16)
-            name_matches = display_names[cid].lower() in name_raw.lower()
-            messages.append({"role": "assistant", "content": name_raw.strip()})
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Good. Keep that animal as your secret for the entire game. "
-                        "Do not state its name again under any circumstances. You "
-                        "must answer later questions truthfully and concisely with "
-                        "'Yes' or 'No' about that secret animal. When your choice "
-                        "is locked in, reply with only the single word: Ready"
-                    ),
-                }
-            )
-            ready_raw = _generate(handle, messages, max_new=8)
-            ready_ok = parse_ready(ready_raw)
+            reminder = _question_reminder(condition, pos)
+            run_id = f"{condition.tag}_{cid}_{k:02d}"
+            run_dir = out_dir / condition.tag / run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+
+            messages = [{"role": "user", "content": _combined_user(rendered)}]
+            ready_activations, ready_raw = _ready_capture_and_generate(handle, messages)
+            ready_act_path = run_dir / "activations.pt"
+            torch.save(ready_activations, ready_act_path)
             messages.append({"role": "assistant", "content": ready_raw.strip()})
-            answers = _score_qa_turns(handle, bank, messages, cid, QUESTION_IDS)
-            results.append(
-                {
-                    "cid": cid,
-                    "seed_tag": f"B:{cid}:{k}",
-                    "seed": seed,
-                    "position": pos,
-                    "permutation": list(perm.order),
-                    "name_raw": name_raw,
-                    "name_matches": name_matches,
-                    "ready_raw": ready_raw,
-                    "ready_ok": ready_ok,
-                    "answers": answers,
-                }
+            answers = _score_qa_turns(
+                handle=handle,
+                bank=bank,
+                messages=messages,
+                secret_canonical_id=cid,
+                question_ids=question_ids,
+                reminder=reminder,
+                run_dir=run_dir,
             )
-    return results
+
+            row = {
+                "run_id": run_id,
+                "condition": condition.tag,
+                "condition_label": condition.label,
+                "cid": cid,
+                "seed_tag": f"{condition.tag}:{cid}:{k}",
+                "seed": seed,
+                "position": pos,
+                "permutation": list(perm.order),
+                "prompt_template_id": PROMPT_TEMPLATE_ID,
+                "ready_raw": ready_raw,
+                "ready_ok": parse_ready(ready_raw),
+                "ready_activation_path": str(ready_act_path),
+                "answers": answers,
+            }
+            with (run_dir / "result.json").open("w") as f:
+                json.dump(row, f, indent=2, default=str)
+            rows.append(row)
+            ready_states.setdefault(cid, []).append(ready_activations)
+
+    return rows, ready_states
 
 
-def run_condition_C(
-    handle: ModelHandle, bank: Bank, candidates: tuple[str, ...], seeds: tuple[int, ...]
-) -> list[dict[str, Any]]:
-    display_names = {c.id: c.display for c in bank.candidates}
-    results: list[dict[str, Any]] = []
-    for cid in candidates:
-        for k in seeds:
-            seed = _seed_for("C", cid, k)
-            perm = shuffle_candidates(bank.candidate_ids, seed=seed)
-            pos = perm.displayed_index(cid)
-            rendered = calibration_prompt(perm, display_names, pos)
-            combined_user = rendered.system.strip() + "\n\n" + rendered.user.strip()
-            messages: list[dict[str, str]] = [{"role": "user", "content": combined_user}]
-            ready_raw = _generate(handle, messages, max_new=8)
-            ready_ok = parse_ready(ready_raw)
-            messages.append({"role": "assistant", "content": ready_raw.strip()})
-            answers = _score_qa_turns(handle, bank, messages, cid, QUESTION_IDS)
-            results.append(
-                {
-                    "cid": cid,
-                    "seed_tag": f"C:{cid}:{k}",
-                    "seed": seed,
-                    "position": pos,
-                    "permutation": list(perm.order),
-                    "ready_raw": ready_raw,
-                    "ready_ok": ready_ok,
-                    "answers": answers,
-                }
-            )
-    return results
+def _cosine_summary(ready_states: dict[str, list[torch.Tensor]]) -> dict[str, Any]:
+    per_candidate: dict[str, Any] = {}
+    all_pair_cosines: list[torch.Tensor] = []
+    for cid, tensors in ready_states.items():
+        if len(tensors) < 2:
+            per_candidate[cid] = {"n_runs": len(tensors), "mean_pairwise_cosine_by_layer": []}
+            continue
+        pair_cosines: list[torch.Tensor] = []
+        for i in range(len(tensors)):
+            for j in range(i + 1, len(tensors)):
+                pair_cosines.append(
+                    torch.nn.functional.cosine_similarity(
+                        tensors[i],
+                        tensors[j],
+                        dim=1,
+                    )
+                )
+        stacked = torch.stack(pair_cosines, dim=0)
+        mean_by_layer = stacked.mean(dim=0)
+        per_candidate[cid] = {
+            "n_runs": len(tensors),
+            "mean_pairwise_cosine_by_layer": [float(x) for x in mean_by_layer.tolist()],
+            "mean_pairwise_cosine_post13": float(mean_by_layer[13:].mean().item()),
+        }
+        all_pair_cosines.append(stacked)
+
+    overall: dict[str, Any] = {}
+    if all_pair_cosines:
+        stacked_all = torch.cat(all_pair_cosines, dim=0)
+        mean_all = stacked_all.mean(dim=0)
+        overall = {
+            "mean_pairwise_cosine_by_layer": [float(x) for x in mean_all.tolist()],
+            "mean_pairwise_cosine_post13": float(mean_all[13:].mean().item()),
+        }
+    return {"per_candidate": per_candidate, "overall": overall}
 
 
-def summarize(tag: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compute answer-correctness per condition run."""
+def _correctness_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     total = 0
     correct = 0
     unparsed = 0
+    ready_ok = 0
     per_candidate: dict[str, dict[str, int]] = {}
     for row in rows:
         cid = row["cid"]
-        per_candidate.setdefault(cid, {"total": 0, "correct": 0, "unparsed": 0})
+        per_candidate.setdefault(
+            cid,
+            {"n_runs": 0, "n_questions_total": 0, "n_correct": 0, "n_unparsed": 0, "n_ready_ok": 0},
+        )
+        per_candidate[cid]["n_runs"] += 1
+        ready_ok += int(row["ready_ok"])
+        per_candidate[cid]["n_ready_ok"] += int(row["ready_ok"])
         for ans in row["answers"]:
             total += 1
-            per_candidate[cid]["total"] += 1
+            per_candidate[cid]["n_questions_total"] += 1
             if ans["correct"] is None:
                 unparsed += 1
-                per_candidate[cid]["unparsed"] += 1
+                per_candidate[cid]["n_unparsed"] += 1
             elif ans["correct"]:
                 correct += 1
-                per_candidate[cid]["correct"] += 1
-    return {
-        "tag": tag,
+                per_candidate[cid]["n_correct"] += 1
+    summary = {
         "n_runs": len(rows),
+        "n_ready_ok": ready_ok,
         "n_questions_total": total,
         "n_correct": correct,
         "n_unparsed": unparsed,
+        "pct_ready_ok": (ready_ok / len(rows)) if rows else 0.0,
         "pct_correct": (correct / total) if total else 0.0,
         "per_candidate": per_candidate,
     }
+    for _cid, per in per_candidate.items():
+        per["pct_correct"] = (
+            per["n_correct"] / per["n_questions_total"] if per["n_questions_total"] else 0.0
+        )
+        per["pct_ready_ok"] = per["n_ready_ok"] / per["n_runs"] if per["n_runs"] else 0.0
+    return summary
 
 
 def parse_args() -> argparse.Namespace:
@@ -263,15 +381,24 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dtype", default="float32", choices=["float32", "bfloat16", "float16"])
     p.add_argument("--out-dir", default="runs/diag/binding_smoke")
     p.add_argument(
-        "--skip-A",
-        action="store_true",
-        help="Skip condition A (bare retrieval). Useful if you already have it.",
+        "--candidates",
+        default=",".join(DEFAULT_CANDIDATES),
+        help="Comma-separated candidate ids to use.",
     )
     p.add_argument(
-        "--n-retrieval-perms",
-        type=int,
-        default=3,
-        help="Number of random permutations to use for condition A retrieval.",
+        "--question-ids",
+        default=",".join(DEFAULT_QUESTION_IDS),
+        help="Comma-separated question ids to ask after Ready.",
+    )
+    p.add_argument(
+        "--seeds",
+        default=",".join(str(x) for x in DEFAULT_SEEDS),
+        help="Comma-separated small integer seed indices per candidate/condition.",
+    )
+    p.add_argument(
+        "--conditions",
+        default=",".join(c.tag for c in CONDITIONS),
+        help="Comma-separated subset of conditions: index,index_reminder,name,name_paraphrase",
     )
     return p.parse_args()
 
@@ -280,17 +407,42 @@ def main() -> int:
     args = parse_args()
     bank = load_bank()
 
-    unknown = set(CANDIDATES) - set(bank.candidate_ids)
-    if unknown:
-        print(f"Unknown candidate ids: {sorted(unknown)}", file=sys.stderr)
+    candidates = tuple(x.strip() for x in args.candidates.split(",") if x.strip())
+    question_ids = tuple(x.strip() for x in args.question_ids.split(",") if x.strip())
+    seeds = tuple(int(x.strip()) for x in args.seeds.split(",") if x.strip())
+    condition_lookup = {c.tag: c for c in CONDITIONS}
+    selected_conditions = tuple(
+        condition_lookup[tag.strip()] for tag in args.conditions.split(",") if tag.strip()
+    )
+
+    unknown_candidates = sorted(set(candidates) - set(bank.candidate_ids))
+    if unknown_candidates:
+        print(f"Unknown candidate ids: {unknown_candidates}", file=sys.stderr)
         return 2
     q_lookup = {q.id: q for q in bank.questions}
-    unknown_q = set(QUESTION_IDS) - set(q_lookup)
-    if unknown_q:
-        print(f"Unknown question ids: {sorted(unknown_q)}", file=sys.stderr)
+    unknown_questions = sorted(set(question_ids) - set(q_lookup))
+    if unknown_questions:
+        print(f"Unknown question ids: {unknown_questions}", file=sys.stderr)
+        return 2
+    unknown_conditions = sorted(
+        {
+            tag.strip()
+            for tag in args.conditions.split(",")
+            if tag.strip() and tag.strip() not in condition_lookup
+        }
+    )
+    if unknown_conditions:
+        print(f"Unknown conditions: {unknown_conditions}", file=sys.stderr)
+        return 2
+    if not selected_conditions:
+        print("No conditions selected.", file=sys.stderr)
         return 2
 
-    dtype = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}[args.dtype]
+    dtype = {
+        "float32": torch.float32,
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+    }[args.dtype]
 
     print(f"Loading {args.model} on {args.device} ({args.dtype}) ...")
     t0 = time.time()
@@ -300,65 +452,63 @@ def main() -> int:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    all_results: dict[str, Any] = {
+    results: dict[str, Any] = {
         "model": args.model,
         "model_revision": handle.model_revision,
-        "prompt_template_id": PROMPT_TEMPLATE_ID,
+        "tokenizer_revision": handle.tokenizer_revision,
         "torch_dtype": args.dtype,
-        "candidates": list(CANDIDATES),
-        "question_ids": list(QUESTION_IDS),
-        "seeds": list(SEEDS),
+        "prompt_template_id": PROMPT_TEMPLATE_ID,
+        "candidates": list(candidates),
+        "question_ids": list(question_ids),
+        "seeds": list(seeds),
+        "conditions": [c.tag for c in selected_conditions],
     }
 
-    if not args.skip_A:
-        print("\n== Condition A: bare retrieval ==")
+    for condition in selected_conditions:
+        print(f"\n== {condition.tag}: {condition.label} ==")
         t0 = time.time()
-        perms_A = [
-            shuffle_candidates(bank.candidate_ids, seed=_seed_for("A", "perm", k))
-            for k in range(args.n_retrieval_perms)
-        ]
-        rows_A = run_condition_A(handle, bank, perms_A)
-        hits = sum(1 for r in rows_A if r["hit"])
-        print(f"  retrieval hit rate: {hits}/{len(rows_A)} in {time.time() - t0:.1f}s")
-        all_results["A"] = {
-            "rows": rows_A,
-            "n_total": len(rows_A),
-            "n_hits": hits,
-            "pct_hits": hits / len(rows_A) if rows_A else 0.0,
+        rows, ready_states = _run_condition(
+            handle=handle,
+            bank=bank,
+            condition=condition,
+            candidates=candidates,
+            seeds=seeds,
+            question_ids=question_ids,
+            out_dir=out_dir,
+        )
+        correctness = _correctness_summary(rows)
+        cosine = _cosine_summary(ready_states)
+        results[condition.tag] = {
+            "label": condition.label,
+            "rows": rows,
+            "correctness": correctness,
+            "ready_cosine": cosine,
         }
-    else:
-        print("\n== Condition A: skipped ==")
-
-    print("\n== Condition B: verbalized index binding ==")
-    t0 = time.time()
-    rows_B = run_condition_B(handle, bank, CANDIDATES, SEEDS)
-    print(f"  {len(rows_B)} runs in {time.time() - t0:.1f}s")
-    all_results["B"] = {"rows": rows_B, "summary": summarize("B", rows_B)}
-
-    print("\n== Condition C: current D-06 ==")
-    t0 = time.time()
-    rows_C = run_condition_C(handle, bank, CANDIDATES, SEEDS)
-    print(f"  {len(rows_C)} runs in {time.time() - t0:.1f}s")
-    all_results["C"] = {"rows": rows_C, "summary": summarize("C", rows_C)}
+        print(
+            f"  {len(rows)} runs in {time.time() - t0:.1f}s; "
+            f"answer correctness {correctness['pct_correct']:.1%}; "
+            f"Ready post-13 cosine "
+            f"{cosine['overall'].get('mean_pairwise_cosine_post13', float('nan')):.3f}"
+        )
 
     out_path = out_dir / "results.json"
     with out_path.open("w") as f:
-        json.dump(all_results, f, indent=2, default=str)
+        json.dump(results, f, indent=2, default=str)
 
     print("\n== Summary ==")
-    if "A" in all_results:
-        print(f"  A retrieval hit rate: {all_results['A']['pct_hits']:.1%} "
-              f"({all_results['A']['n_hits']}/{all_results['A']['n_total']})")
-    for tag in ("B", "C"):
-        s = all_results[tag]["summary"]
+    for condition in selected_conditions:
+        payload = results[condition.tag]
+        correctness = payload["correctness"]
+        cosine = payload["ready_cosine"]["overall"]
         print(
-            f"  {tag} answer correctness: {s['pct_correct']:.1%} "
-            f"({s['n_correct']}/{s['n_questions_total']}, "
-            f"{s['n_unparsed']} unparsed)"
+            f"  {condition.tag}: "
+            f"ready {correctness['pct_ready_ok']:.1%} "
+            f"({correctness['n_ready_ok']}/{correctness['n_runs']}), "
+            f"answers {correctness['pct_correct']:.1%} "
+            f"({correctness['n_correct']}/{correctness['n_questions_total']}), "
+            f"unparsed={correctness['n_unparsed']}, "
+            f"post13-cos={cosine.get('mean_pairwise_cosine_post13', float('nan')):.3f}"
         )
-        for cid, per in s["per_candidate"].items():
-            print(f"    {cid}: {per['correct']}/{per['total']} correct, {per['unparsed']} unparsed")
-
     print(f"\nWrote {out_path}")
     return 0
 
