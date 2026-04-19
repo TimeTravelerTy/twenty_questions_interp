@@ -4,8 +4,8 @@
 > without reading anything else. Update the `Last updated` line on every session.
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
-**Last agent:** Codex
-**Last updated:** 2026-04-19 (added `scripts/diagnose_selfchosen_ready.py` to run the 4-candidate self-chosen Ready-state comparator against persistence State A vs B)
+**Last agent:** Claude (Opus 4.7)
+**Last updated:** 2026-04-19 (self-chosen Ready smoke done; choice distribution collapsed to 2/4 classes, Ready geometry ~6.7× weaker than State B; see `docs/progress/M3-selfchosen-ready-smoke.md`)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -14,53 +14,59 @@ Do not publish calibration-only results as the headline.
 
 ## Next concrete step
 
-Prior notes in order of recency: **`docs/progress/M3-h-persistence.md`**
-(job `7218322`), `docs/progress/M3-binding-bank-audit.md`,
+Prior notes in order of recency:
+**`docs/progress/M3-selfchosen-ready-smoke.md`** (job `7218660`),
+`docs/progress/M3-h-persistence.md` (job `7218322`),
+`docs/progress/M3-binding-bank-audit.md`,
 `docs/progress/M3-3cond-binding-smoke.md` (job `7218265`),
 `docs/progress/M3-4cond-binding-smoke.md`, `docs/progress/M3-4b-smoke-diagnostics.md`.
 
-**Result so far (H-persistence diagnostic, done):** on `verbalized_index`,
-all 8 runs verbalize the correct name. At middle layers the entity is
-**100% NC-decodable at both state A (post-verbalization) and state B
-(pre-Ready)** — but:
+**Result so far (self-chosen Ready smoke, done):** 40 attempts on the same
+4 candidates as the persistence diagnostic. Two findings:
 
-- **Cross A→B at layer 21 = 37.5%** (at-chance for most middle layers).
-  Centroids fit at A do not classify B.
-- **Within-vs-between cosine contrast at B is ~25× weaker than at A**
-  (5.17e-04 vs 1.28e-02, post-L13). The entity signal is still present but
-  nearly drowned in Ready-prep components.
-- Primary correctness still 71.9% with the exact same systematic errors
-  (eagle → mammal=Yes in 2/2, frog → mammal=Yes in 2/2, etc.).
+1. **Choice distribution collapses.** salmon 33 / frog 7 / tiger 0 /
+   eagle 0. Strong position bias (salmon- or frog-at-position-0 always
+   chosen) + category bias (the two non-mammal-or-bird items dominate).
+   Under greedy decoding, "self-chosen" is closer to biased-forced-choice.
+2. **Self-chosen Ready is ~6.7× weaker than State B** (2-class balanced
+   analysis, salmon vs frog, n=7 each). Post-13 within-between contrast:
+   self-chosen +7.85e-05, State B +5.26e-04, State A +1.31e-02. Identity
+   is NC-decodable at 100% only from L29 onward — not at L21 where A and
+   B both peak.
 
-The original H-persistence hypothesis ("entity does not persist") is
-**refuted in its strong form**. Replaced by **H-rotation**: entity identity
-persists across the chat-turn boundary, but the geometry rotates and the
-amplitude collapses. Attribute readouts trained at A would not transfer to
-B — which is exactly what explains the answer drift.
+Ordering: **A > B > self-chosen Ready** (by cosine contrast). The latent
+identity is still recoverable, but only at late layers with much weaker
+amplitude than either persistence state. See D-23.
 
-**Next concrete step:** run the dedicated self-chosen 4B Ready-state smoke
-and compare it against persistence State A vs B.
+**Next concrete step:** patched self-chosen replication that (a) breaks the
+greedy choice collapse and (b) falls back to restricted-class analysis
+when the full 4-class quota isn't met.
 
-1. On TSUBAME, run:
-   `uv run python scripts/diagnose_selfchosen_ready.py --model google/gemma-3-4b-it --device auto --dtype bfloat16 --n-per-candidate 2 --max-attempts 40 --out-dir runs/diag/selfchosen_ready_smoke --persistence-results runs/diag/persistence_smoke/results.json`
-2. Read `runs/diag/selfchosen_ready_smoke/results.json`.
-3. Check `ready_analysis.comparison_to_persistence.overall`:
-   `state_a` means the readout pipeline is likely unblocked at Ready;
-   `state_b` means the blog story has to center on decodable-but-rotated
-   latents; `mixed` means we need a slightly larger smoke before scaling.
-
-If self-chosen looks like A: the readout pipeline is unblocked; pick a
-layer, scale the calibration, move to M3 full. If self-chosen looks like
-B: the blog story has to center on "decodable-but-rotated latent," and
-we need to think harder about where in the dialogue to anchor probes —
-possibly before we bother with the full calibration sweep.
+1. Patch `scripts/diagnose_selfchosen_ready.py` to:
+   - Emit the ready-analysis block whenever ≥2 classes have ≥`n-per-candidate`
+     kept runs (don't abort).
+   - Accept a `--temperature` flag (default 0.0 = greedy; non-zero enables
+     `do_sample=True` with that temperature) so we can trade determinism
+     for distribution variety.
+2. On TSUBAME, run a temperature-sampled replication:
+   `python scripts/diagnose_selfchosen_ready.py --model google/gemma-3-4b-it --device auto --dtype bfloat16 --n-per-candidate 4 --max-attempts 120 --temperature 0.7 --out-dir runs/diag/selfchosen_ready_T07 --persistence-results runs/diag/persistence_smoke_20260419/results.json`
+3. If that still collapses, widen the candidate list (e.g. the full 20)
+   and re-run; that's a scientifically-cleaner self-chosen setup for
+   M4 anyway.
+4. Once 4+ classes are realized, read `ready_analysis.comparison_to_persistence`
+   and update `docs/progress/M3-selfchosen-ready-smoke.md` with the
+   stronger numbers.
 
 **Open threads kept deliberately on the backlog, not closed:**
-- **Bigger-model ladder (D-05):** competence at 12B+ will likely change
-  the H-rotation picture; re-run `diagnose_persistence.py` when we scale.
+- **Bigger-model ladder (D-05):** competence at 12B+ will likely widen
+  the self-chosen distribution and clean the geometry; re-run both
+  `diagnose_persistence.py` and `diagnose_selfchosen_ready.py` when we
+  scale.
 - **Bank improvement:** the 20×30 answer table still has documented
   disputed cells (`docs/progress/M3-binding-bank-audit.md`); a broader
   audit is due but not blocking the current research branch.
+- **Full 20-candidate self-chosen:** whether the position / category
+  biases above survive when the prompt contains all 20 is untested.
 
 Ground truth for scientific claims remains self-chosen. Keep publishing only
 self-chosen results as the headline.

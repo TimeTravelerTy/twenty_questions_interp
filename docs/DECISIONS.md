@@ -260,3 +260,52 @@ Decision:
 Implementation consequence: add a dedicated script
 `scripts/diagnose_selfchosen_ready.py` instead of overloading the older
 `run_selfchosen_smoke.py` runner.
+
+## 2026-04-19 — D-23: Self-chosen Ready is ~6.7× weaker than State B; probes fit at self-chosen Ready, not transferred
+
+Result from `runs/diag/selfchosen_ready_smoke_20260419/` (see
+`docs/progress/M3-selfchosen-ready-smoke.md`). Two concrete findings drive
+this decision:
+
+1. **Choice distribution collapses under greedy decoding.** Across 40
+   attempts with 4 candidates (`tiger, eagle, frog, salmon`), the model
+   picked salmon 33× and frog 7×; tiger and eagle were never chosen.
+   Strong position bias: salmon-at-position-0 is chosen 15/15. Tiger/eagle
+   at position 0 default to salmon. "Self-chosen" under greedy is closer
+   to biased-forced-choice.
+2. **Self-chosen Ready geometry is weaker than State B.** In a balanced
+   2-class (salmon vs frog, n=7 each) analysis, the post-13 within-between
+   cosine contrast is +7.85e-05 vs State B's +5.26e-04 (~6.7×) and State A's
+   +1.31e-02 (~166×). Identity is NC-decodable at 100% only from layer 29
+   onward — not at the mid layers (~L21) where A and B both peak.
+
+Ordering: A (post-verbalization) > B (pre-Ready after lock-in) > self-chosen
+Ready. Self-chosen is the most-collapsed regime of the three.
+
+Decisions:
+
+- **Probe-training location** (reinforces D-21): attribute readouts must be
+  fit at self-chosen Ready directly. Transfer from calibration positions
+  that resemble State A or State B will fail.
+- **SAE feature case studies (M5)** should target layers ≥ L29 if the goal
+  is to capture self-chosen identity features. Mid-layer features that work
+  during calibration may not be there at self-chosen Ready.
+- **Follow-up run design**: the quota-based 4-candidate script
+  (`diagnose_selfchosen_ready.py`) cannot satisfy its own A-vs-B vote when
+  the choice distribution collapses to 2 classes. The next self-chosen run
+  should either (a) use temperature sampling (e.g. T=0.7) to broaden the
+  realized reveal distribution, (b) expand to a larger candidate set so
+  4+ realized classes are plausible, or (c) both. The script should also
+  be patched to fall back to a restricted-class analysis when the full
+  quota is not reached, rather than aborting.
+
+Kept open, not closed:
+
+- **D-05 model ladder.** At 12B+, the choice distribution may broaden and
+  the geometry may be cleaner. Re-running this diagnostic when scaling is
+  standing backlog.
+- **Bank audit.** The disputed cells from D-20 still apply to the realized
+  salmon/frog runs; the representational finding does not depend on
+  answer correctness.
+- **Full 20-candidate self-chosen.** Whether the 20-way prompt produces
+  a wider distribution under greedy is untested.
