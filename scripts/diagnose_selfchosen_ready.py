@@ -232,6 +232,7 @@ def _choose_closer(value: float | None, a: float | None, b: float | None) -> str
 
 
 def _compare_against_persistence(
+    analysis_class_ids: list[str],
     ready_nc_by_layer: list[float],
     ready_contrast: dict[str, Any],
     persistence_path: Path,
@@ -240,6 +241,16 @@ def _compare_against_persistence(
         return None
     with persistence_path.open() as f:
         persistence = json.load(f)
+
+    persistence_class_ids = list(persistence.get("class_ids", []))
+    if persistence_class_ids != analysis_class_ids:
+        return {
+            "persistence_results_path": str(persistence_path),
+            "comparison_skipped_reason": (
+                "class_ids_mismatch: self_chosen="
+                f"{analysis_class_ids} persistence={persistence_class_ids}"
+            ),
+        }
 
     p = persistence["persistence"]
     layer = int(p["post13_best_layer_by_a"])
@@ -409,6 +420,7 @@ def main() -> int:
             n_answer_correct += per_candidate[cid]["n_answer_correct"]
 
         comparison = _compare_against_persistence(
+            list(analysis_class_ids),
             ready_nc_by_layer,
             ready_contrast,
             Path(args.persistence_results),
@@ -467,11 +479,17 @@ def main() -> int:
             )
         comparison = ready.get("comparison_to_persistence")
         if comparison is not None:
-            print(
-                "  resembles: "
-                f"{comparison['overall']} "
-                f"(votes={comparison['vote_by_metric']})"
-            )
+            if "overall" in comparison:
+                print(
+                    "  resembles: "
+                    f"{comparison['overall']} "
+                    f"(votes={comparison['vote_by_metric']})"
+                )
+            else:
+                print(
+                    "  persistence comparison skipped: "
+                    f"{comparison['comparison_skipped_reason']}"
+                )
     else:
         print(
             "\nFewer than 2 realized classes met quota; no ready-state analysis "
