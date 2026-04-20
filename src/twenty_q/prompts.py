@@ -64,6 +64,32 @@ def calibration_prompt(
     return RenderedPrompt(system=system, user=user)
 
 
+def calibration_prompt_name_paraphrase(
+    perm: Permutation,
+    display_names: dict[str, str],
+    secret_canonical_id: str,
+) -> RenderedPrompt:
+    """Build the name-based calibration prompt selected for 12B follow-up work."""
+    if secret_canonical_id not in display_names:
+        raise ValueError(f"Unknown secret_canonical_id {secret_canonical_id!r}")
+    secret_display_name = display_names[secret_canonical_id]
+    system = (
+        "You are playing a 20-Questions-style game. An adversary will ask you "
+        "yes/no questions about a single secret animal that you are holding in "
+        "mind. You must answer each question truthfully and concisely with "
+        "either 'Yes' or 'No' about the secret animal. Do not reveal the "
+        "identity of the secret animal under any circumstances."
+    )
+    user = (
+        "Here is the list of candidate animals:\n\n"
+        f"{_candidate_list(perm, display_names)}\n\n"
+        f"You have chosen {secret_display_name} as your secret animal. Keep using "
+        "that same animal for the entire game. Do not state the name of the animal "
+        "again. When your choice is locked in, reply with only the single word: Ready"
+    )
+    return RenderedPrompt(system=system, user=user)
+
+
 def self_chosen_prompt(
     perm: Permutation,
     display_names: dict[str, str],

@@ -10,8 +10,10 @@ from twenty_q.dialogue import (
     parse_ready,
     parse_reveal_to_canonical,
     parse_yes_no,
+    run_calibration_dialogue,
 )
 from twenty_q.manifest import TurnRecord
+from twenty_q.permutations import shuffle_candidates
 from twenty_q.prompts import RenderedPrompt
 
 
@@ -150,3 +152,41 @@ def test_elicit_reveal_after_turns_replays_history(monkeypatch):
             ),
         },
     ]
+
+
+def test_run_calibration_dialogue_supports_name_paraphrase_schema(monkeypatch, tmp_path: Path):
+    bank = load_bank()
+    perm = shuffle_candidates(bank.candidate_ids, seed=123)
+    captured = {}
+
+    def fake_capture_ready_state(handle, rendered, temperature=0.0):
+        captured["user"] = rendered.user
+        return torch.ones(3, 4), "Ready"
+
+    monkeypatch.setattr("twenty_q.dialogue.capture_ready_state", fake_capture_ready_state)
+
+    manifest = run_calibration_dialogue(
+        handle=type(
+            "Handle",
+            (),
+            {
+                "model_name": "model",
+                "model_revision": "rev",
+                "tokenizer_revision": "tok",
+                "torch_dtype": "float32",
+                "device": "cpu",
+            },
+        )(),
+        bank=bank,
+        secret_canonical_id="tiger",
+        perm=perm,
+        seed=7,
+        run_id="cal_tiger_00",
+        out_dir=tmp_path,
+        schema="name_paraphrase",
+    )
+
+    assert "You have chosen tiger as your secret animal." in captured["user"]
+    assert manifest.calibration_schema == "name_paraphrase"
+    assert manifest.secret_canonical_id == "tiger"
+    assert manifest.secret_displayed_index == perm.displayed_index("tiger")

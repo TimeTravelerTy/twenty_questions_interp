@@ -32,6 +32,7 @@ class RunManifest(BaseModel):
 
     # Prompt + decoding.
     prompt_template_id: str
+    calibration_schema: str | None = None
     seed: int
     decoding_params: dict = Field(default_factory=dict)
 

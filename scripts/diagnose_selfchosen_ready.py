@@ -243,7 +243,7 @@ def _compare_against_persistence(
         persistence = json.load(f)
 
     persistence_class_ids = list(persistence.get("class_ids", []))
-    if persistence_class_ids != analysis_class_ids:
+    if set(persistence_class_ids) != set(analysis_class_ids):
         return {
             "persistence_results_path": str(persistence_path),
             "comparison_skipped_reason": (

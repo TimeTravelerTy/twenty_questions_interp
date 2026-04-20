@@ -77,3 +77,18 @@ def test_compare_against_persistence_returns_vote_for_matched_class_ids(tmp_path
         },
         "overall": "mixed",
     }
+
+
+def test_compare_against_persistence_accepts_reordered_matched_class_ids(tmp_path: Path):
+    persistence_path = tmp_path / "persistence.json"
+    _write_persistence_fixture(persistence_path, ["horse", "dolphin"])
+
+    result = _compare_against_persistence(
+        ["dolphin", "horse"],
+        [0.0] * 30,
+        {"contrast_post13": 0.19},
+        persistence_path,
+    )
+
+    assert result["overall"] == "mixed"
+    assert result["reference_nc"] == {"state_a": 0.0, "state_b": 1.0}

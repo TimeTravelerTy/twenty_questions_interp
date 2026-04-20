@@ -350,3 +350,98 @@ Kept open, not closed:
 - **Bank audit.** Unchanged.
 - **20-candidate self-chosen.** Now promoted from "optional" to the main
   next self-chosen experiment in STATUS.md.
+
+## 2026-04-20 — D-25: Do not standardize 4B calibration; matched 5-way `name_paraphrase` still fails at 85%
+
+After the 20-bank self-chosen smoke (`docs/progress/M3-selfchosen-20bank.md`,
+job `7223018`) realized a 5-class subset with quota (`dolphin,horse,penguin,
+crocodile,shark`), the natural pragmatic test was the user's suggested branch:
+pick the single best calibration schema and see if it finally clears the
+semantic gate on the more realistic subset.
+
+We ran exactly that: `name_paraphrase` only, 5 candidates × 2 seeds on 4B
+(job `7226502`). Result:
+
+- Ready parse: 10/10
+- Primary correctness: **34/40 = 85.0%**
+- Secondary `can_swim`: 9/10 = 90.0%
+- Post-L13 within-vs-between contrast: **+5.41e-04**
+
+This is effectively the same correctness regime as the earlier 4-candidate
+name-based smokes, not a recovery. Restricting to the self-chosen-realized
+subset does **not** rescue calibration at 4B.
+
+Decision:
+
+1. Do **not** standardize `name_paraphrase` as the 4B calibration harness.
+2. Do **not** launch the full ~2k calibration run at 4B.
+3. Treat calibration at 4B as still unresolved infrastructure, not the path to
+   probe training.
+
+## 2026-04-20 — D-26: 20-bank self-chosen fixes class collapse enough to analyze, but 4B Ready remains far weaker than persistence B; escalate D-05
+
+The 20-bank self-chosen run on 4B (job `7223018`) materially changed the class
+distribution relative to the old 4-candidate panel:
+
+- reveals over 200 attempts: **dolphin 104, penguin 85, shark 5, crocodile 2,
+  horse 2, cow 1, salmon 1**
+- quota `n=2` reached for **5 classes**
+
+So the broader prompt is worth keeping. But the representational result is still
+weak:
+
+- balanced 5-way self-chosen Ready: best post-L13 NC = **10.0%** (chance 20%)
+- self-chosen post-L13 contrast: **+4.70e-06**
+
+Matched persistence on the same 5 classes (job `7226501`) remains strong:
+
+- State A NC at L21: **100%**
+- State B NC at L21: **100%**
+- cross A→B at L21: **90%**
+- State B post-L13 contrast: **+4.87e-04**
+
+This makes self-chosen 20-bank Ready about **104× weaker than persistence
+State B** on the same class set. By the current vote rule the matched
+comparison is still formally "mixed" (`nc=tie`, `contrast=state_b`), but the
+scale is the real finding: 4B is not yet in a probe-ready self-chosen regime.
+
+Decision:
+
+1. Keep the **20-bank prompt** for self-chosen work at 4B+; it solved the
+   4-way collapse enough to expose more classes.
+2. Do **not** spend more time on 4B calibration prompt variants right now.
+3. Escalate **D-05**: next productive branch is a 12B self-chosen 20-bank
+   replicate before any full calibration launch.
+
+## 2026-04-20 — D-27: Standardize `name_paraphrase` at 12B; 4B remains unresolved
+
+The 12B branch answered the user's "pick one schema and move on if it passes"
+proposal.
+
+Sequence:
+
+1. `7226538` (`google/gemma-3-12b-it`, 20-bank self-chosen, greedy) realized a
+   4-class subset with quota: `elephant,cow,dog,horse`.
+2. The legacy 4-question panel turned out to be degenerate on that subset, so
+   we switched the matched controls to a six-question panel that actually
+   separates those four animals:
+   `is_carnivore,is_larger_than_human,is_domesticated,lives_in_africa,`
+   `produces_dairy_milk,is_ridden_by_humans`.
+3. On that panel:
+   - matched persistence 12B (`7226546`) stayed strong:
+     - primary correctness **45/48 = 93.8%**
+     - NC-A **100%** at L30
+     - NC-B **75%** at L30
+   - matched calibration 12B, `name_paraphrase` (`7226547`) hit
+     **47/48 = 97.9%**
+
+Decision:
+
+1. **Standardize `name_paraphrase` as the calibration schema at 12B.**
+2. This is the first regime that clears the long-standing `>=95%` gate, so it is
+   now valid to use calibration as Ready-state probe-training infrastructure.
+3. Do **not** infer from this that 4B is fixed. 4B calibration remains
+   unresolved and should stay off the main path.
+4. The next concrete step is no longer "find a better calibration prompt." It is
+   "collect a pilot 12B Ready-state calibration set with `name_paraphrase` and
+   start training dense readouts."

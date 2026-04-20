@@ -5,7 +5,7 @@
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
 **Last agent:** Codex
-**Last updated:** 2026-04-20 (reviewed Claude's latest M3 handoff; repo remains aligned with the self-chosen-first plan, and `scripts/diagnose_selfchosen_ready.py` now supports `--candidates all` / `--question-ids all` directly so the 20-candidate self-chosen run no longer depends on a brittle explicit 20-id CLI string)
+**Last updated:** 2026-04-20 (12B matched controls closed: `name_paraphrase` calibration on the realized 4-way subset cleared the gate at 47/48 = 97.9% in job `7226547`; persistence stayed strong in `7226546`; calibration is now standardized at 12B and the next step is pilot Ready-state data collection with that schema)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -15,61 +15,66 @@ Do not publish calibration-only results as the headline.
 ## Next concrete step
 
 Prior notes in order of recency:
-**`docs/progress/M3-selfchosen-ready-T07.md`** (job `7219788`),
+**`docs/progress/M3-selfchosen-20bank.md`** (jobs `7223018`, `7226501`, `7226502`),
+`docs/progress/M3-selfchosen-ready-T07.md` (job `7219788`),
 `docs/progress/M3-selfchosen-ready-smoke.md` (job `7218660`),
 `docs/progress/M3-h-persistence.md` (job `7218322`),
 `docs/progress/M3-binding-bank-audit.md`,
 `docs/progress/M3-3cond-binding-smoke.md` (job `7218265`),
 `docs/progress/M3-4cond-binding-smoke.md`, `docs/progress/M3-4b-smoke-diagnostics.md`.
 
-**Result so far (T=0.7 self-chosen replication, done, see D-24):**
-120 attempts on the same 4 candidates with T=0.7 sampling across Ready,
-question, and reveal generations.
+**Result so far (4B diagnosed; 12B calibration unlocked):**
 
-1. **Choice collapse persists.** salmon 96 / frog 24 / tiger 0 / eagle 0.
-   Temperature was not the cause; the 4B model's self-chosen prior on
-   this panel is ~{salmon: dominant, frog: minor, tiger/eagle: ~0}.
-   Salmon-at-position-0 → salmon 39/39; eagle@0 → salmon 31/31;
-   tiger@0 → salmon 20 / frog 4. Only frog@0 reliably flips (20/26).
-2. **Geometry tightened slightly but did not close the gap.** Balanced
-   2-class (salmon vs frog, n=4): post-13 contrast +1.14e-04 (vs T=0's
-   +7.85e-05, 1.45×); best NC layer shifted L29 → **L24**; still ~4.5×
-   weaker than State B at matched sample size. Comparison vote vs
-   persistence: **mixed** (nc tie at L21, contrast still state_b).
-3. **Answer correctness dropped to 53%** under sampling — sampling noise
-   eats the yes/no fluency that later calibration-based probes assume.
+1. **The 20-bank prompt is a real improvement over the 4-candidate panel.**
+   Greedy 4B no longer collapses to just salmon/frog. Over 200 attempts the
+   reveal histogram is dolphin 104 / penguin 85 / shark 5 / crocodile 2 /
+   horse 2 / cow 1 / salmon 1, so 7 classes appear and 5 reach quota `n=2`.
+2. **But Ready-state geometry is still very weak at 4B.** On the balanced
+   realized 5-way subset (`dolphin,horse,penguin,crocodile,shark`),
+   self-chosen best post-L13 NC is only **10.0%** (chance 20%) and
+   post-L13 within-between contrast is **+4.70e-06**.
+3. **Matched persistence on the same 5 classes remains strong.** State A and
+   State B both hit **100% NC at L21**, cross A→B is **90%**, and State B
+   contrast is **+4.87e-04**. Self-chosen is therefore still about **104×
+   weaker than matched persistence State B** on contrast.
+4. **Matched calibration still fails the gate.** The best single schema,
+   `name_paraphrase`, scores only **34/40 = 85.0%** primary correctness on
+   the same realized 5-way subset. That is not good enough to standardize.
+5. **12B improves raw self-chosen behavior but exposes a question-panel bug.**
+   Greedy 12B over 100 attempts realizes 4 classes with quota
+   (`elephant,cow,dog,horse`) and reaches **37.5% NC** at L15 (chance 25%),
+   but the legacy 4-question panel is non-diagnostic on that subset:
+   every realized class has the same answer fingerprint `1,0,0,1`. So the
+   apparent 100% correctness there is not a meaningful calibration signal.
+6. **A discriminative 12B matched control panel fixes that and clears the gate.**
+   On the six-question panel
+   `is_carnivore,is_larger_than_human,is_domesticated,lives_in_africa,produces_dairy_milk,is_ridden_by_humans`,
+   matched persistence stays strong (`7226546`: 45/48 = 93.8%, NC-A 100% at L30)
+   and matched calibration with **`name_paraphrase`** finally passes the
+   semantic gate (`7226547`: **47/48 = 97.9%**).
 
-Conclusion: the 4-candidate self-chosen smoke is closed as a 4-way test
-at 4B. The fix is not more sampling — it's a less-biased prompt. Ordering
-still holds: **A > B > self-chosen Ready**.
+Conclusion: 4B self-chosen is better with the 20-bank prompt, but 4B is still
+not in a probe-ready regime. At **12B**, calibration is no longer the blocker:
+`name_paraphrase` is good enough to use as probe-training infrastructure.
 
-**Next concrete step:** full 20-candidate self-chosen smoke, to test the
-hypothesis that diluting the salmon attractor with 16 additional animals
-(a) broadens the realized-class distribution enough to run a 4+ way test
-and (b) is in any case the scientifically cleaner self-chosen setup
-required for M4.
+**Next concrete step:** launch a pilot 12B Ready-state calibration collection
+with the validated schema:
 
-1. Decide the question set. Either (a) keep the 4 primary attribute
-   questions from persistence/self-chosen-smoke (`is_mammal, is_bird,
-   lives_primarily_in_water, has_four_legs`) for direct comparability,
-   or (b) use the full bank. Default to (a) for comparability — the
-   representational claim is about Ready-state, not question dynamics.
-2. Invoke `scripts/diagnose_selfchosen_ready.py` with the full 20-bank
-   subset via `--candidates all`. Leave `--question-ids` at the 4 primary
-   questions by default for comparability; use `--question-ids all` only
-   if the run's purpose changes from Ready-state comparability to broader
-   dialogue characterization.
-3. On TSUBAME, submit T=0.0 first (to characterize the greedy
-   distribution on the 20-candidate prompt) with generous `--max-attempts`
-   (say 200) and `--n-per-candidate 2` as a quota floor. Expected runtime
-   ≤10 min on H100 given the ~45s/run × 200 bound.
-4. If T=0.0 on 20 still collapses to one or two classes, add T=0.7 as a
-   follow-up; if that also collapses, scale the model (D-05).
-5. Pull results, compute the 4+ way `comparison_to_persistence` (will
-   require persistence results to be restricted to the same class set
-   for a fair comparison — probably do the comparison in an ad-hoc
-   analysis notebook first, like we did for the 2-class T=0.7 run).
-6. Write `docs/progress/M3-selfchosen-20bank.md` and update STATUS / D-24.
+- model: `google/gemma-3-12b-it`
+- schema: **`name_paraphrase`**
+- candidates: `elephant,cow,dog,horse`
+- questions:
+  `is_carnivore,is_larger_than_human,is_domesticated,lives_in_africa,produces_dairy_milk,is_ridden_by_humans`
+
+1. Use `scripts/run_calibration.py --schema name_paraphrase` to collect a pilot
+   dataset on the validated 4-way subset at 12B.
+2. Start with a modest but probe-usable size (for example 25–50 runs per class)
+   rather than jumping straight to the old ~2k 4B target.
+3. Train the first dense Ready-state readouts on that pilot:
+   - candidate decoder
+   - attribute decoders for the six-question panel
+4. Only after those readouts behave sensibly on held-out calibration runs decide
+   whether to scale the same 12B schema to a broader candidate/question set.
 
 **Open threads kept deliberately on the backlog, not closed:**
 - **Bigger-model ladder (D-05):** 4B's salmon attractor may be model-specific.

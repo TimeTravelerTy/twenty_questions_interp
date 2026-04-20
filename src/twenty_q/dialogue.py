@@ -27,6 +27,7 @@ from .prompts import (
     REVEAL_USER_MESSAGE,
     RenderedPrompt,
     calibration_prompt,
+    calibration_prompt_name_paraphrase,
     question_turn_prompt,
     self_chosen_prompt,
 )
@@ -317,11 +318,19 @@ def run_calibration_dialogue(
     run_id: str,
     out_dir: Path,
     questions: list[Question] | None = None,
+    schema: str = "index",
 ) -> RunManifest:
     """Run one calibration dialogue and optionally continue with question turns."""
     display_names = {c.id: c.display for c in bank.candidates}
     secret_idx = perm.displayed_index(secret_canonical_id)
-    rendered = calibration_prompt(perm, display_names, secret_idx)
+    if schema == "index":
+        rendered = calibration_prompt(perm, display_names, secret_idx)
+    elif schema == "name_paraphrase":
+        rendered = calibration_prompt_name_paraphrase(
+            perm, display_names, secret_canonical_id
+        )
+    else:
+        raise ValueError(f"Unknown calibration schema {schema!r}")
 
     activations, ready_raw = capture_ready_state(handle, rendered)
 
@@ -349,6 +358,7 @@ def run_calibration_dialogue(
         torch_dtype=handle.torch_dtype,
         device=handle.device,
         prompt_template_id=rendered.template_id,
+        calibration_schema=schema,
         seed=seed,
         decoding_params={"do_sample": False, "max_new_tokens": 8},
         permutation=list(perm.order),
@@ -411,6 +421,7 @@ def run_selfchosen_dialogue(
         torch_dtype=handle.torch_dtype,
         device=handle.device,
         prompt_template_id=rendered.template_id,
+        calibration_schema=None,
         seed=seed,
         decoding_params={"do_sample": False, "max_new_tokens": 8, "reveal_tokens": 48},
         permutation=list(perm.order),

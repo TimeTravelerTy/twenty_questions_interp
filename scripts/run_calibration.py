@@ -18,6 +18,8 @@ import hashlib
 import sys
 import time
 
+import torch
+
 from twenty_q.banks import load_bank
 from twenty_q.config import CALIBRATION_RUNS_DIR, MODEL_DEBUG
 from twenty_q.dialogue import load_model, run_calibration_dialogue
@@ -27,7 +29,14 @@ from twenty_q.permutations import shuffle_candidates
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--model", default=MODEL_DEBUG)
+    p.add_argument("--dtype", default="float32", choices=["float32", "bfloat16", "float16"])
     p.add_argument("--n-per-candidate", type=int, default=8)
+    p.add_argument(
+        "--schema",
+        default="index",
+        choices=["index", "name_paraphrase"],
+        help="Calibration schema for Ready-state collection.",
+    )
     p.add_argument("--candidates", default="",
                    help="Comma-separated candidate ids to restrict to; empty = all 20.")
     p.add_argument("--question-ids", default="",
@@ -58,9 +67,15 @@ def main() -> int:
         return 2
     questions = [question_lookup[qid] for qid in question_ids]
 
-    print(f"Loading {args.model} on {args.device} ...")
+    dtype = {
+        "float32": torch.float32,
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+    }[args.dtype]
+
+    print(f"Loading {args.model} on {args.device} ({args.dtype}) ...")
     t0 = time.time()
-    handle = load_model(args.model, device=args.device)
+    handle = load_model(args.model, device=args.device, dtype=dtype)
     print(f"  loaded in {time.time() - t0:.1f}s")
 
     total = len(target_ids) * args.n_per_candidate
@@ -80,11 +95,12 @@ def main() -> int:
                     bank=bank,
                     secret_canonical_id=cid,
                     perm=perm,
-                    seed=seed,
-                    run_id=run_id,
-                    out_dir=CALIBRATION_RUNS_DIR,
-                    questions=questions or None,
-                )
+                seed=seed,
+                run_id=run_id,
+                out_dir=CALIBRATION_RUNS_DIR,
+                questions=questions or None,
+                schema=args.schema,
+            )
             except Exception as e:  # noqa: BLE001
                 failures.append(f"{run_id}: {type(e).__name__}: {e}")
                 print(f"  [{done+1}/{total}] {run_id}  FAILED: {e}")
