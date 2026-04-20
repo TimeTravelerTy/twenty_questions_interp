@@ -21,6 +21,8 @@ import time
 import torch
 
 from twenty_q.banks import load_bank
+from pathlib import Path
+
 from twenty_q.config import CALIBRATION_RUNS_DIR, MODEL_DEBUG
 from twenty_q.dialogue import load_model, run_calibration_dialogue
 from twenty_q.permutations import shuffle_candidates
@@ -31,6 +33,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model", default=MODEL_DEBUG)
     p.add_argument("--dtype", default="float32", choices=["float32", "bfloat16", "float16"])
     p.add_argument("--n-per-candidate", type=int, default=8)
+    p.add_argument(
+        "--out-dir",
+        default=str(CALIBRATION_RUNS_DIR),
+        help="Directory to write run subdirectories into.",
+    )
     p.add_argument(
         "--schema",
         default="index",
@@ -78,6 +85,9 @@ def main() -> int:
     handle = load_model(args.model, device=args.device, dtype=dtype)
     print(f"  loaded in {time.time() - t0:.1f}s")
 
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     total = len(target_ids) * args.n_per_candidate
     done = 0
     failures: list[str] = []
@@ -95,12 +105,12 @@ def main() -> int:
                     bank=bank,
                     secret_canonical_id=cid,
                     perm=perm,
-                seed=seed,
-                run_id=run_id,
-                out_dir=CALIBRATION_RUNS_DIR,
-                questions=questions or None,
-                schema=args.schema,
-            )
+                    seed=seed,
+                    run_id=run_id,
+                    out_dir=out_dir,
+                    questions=questions or None,
+                    schema=args.schema,
+                )
             except Exception as e:  # noqa: BLE001
                 failures.append(f"{run_id}: {type(e).__name__}: {e}")
                 print(f"  [{done+1}/{total}] {run_id}  FAILED: {e}")
