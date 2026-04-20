@@ -6,6 +6,7 @@ for the scientific claim (see docs/PLAN.md section 4).
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -171,6 +172,38 @@ def subset_bank(
         for cid in candidate_ids
     }
     return Bank(candidates=candidates, questions=questions, answers=answers)
+
+
+def resolve_id_selector(
+    raw: str | None,
+    available_ids: Sequence[str],
+    *,
+    label: str,
+) -> tuple[str, ...]:
+    """Resolve a comma-separated CLI selector, with `all` as a sentinel."""
+    if raw is None:
+        return tuple(available_ids)
+
+    selected = tuple(part.strip() for part in raw.split(",") if part.strip())
+    if not selected:
+        raise ValueError(f"{label} selector is empty")
+    if len(selected) == 1 and selected[0].lower() == "all":
+        return tuple(available_ids)
+
+    duplicates: list[str] = []
+    seen: set[str] = set()
+    for item in selected:
+        if item in seen and item not in duplicates:
+            duplicates.append(item)
+        seen.add(item)
+    if duplicates:
+        raise ValueError(f"Duplicate {label} ids: {duplicates}")
+
+    available = set(available_ids)
+    unknown = [item for item in selected if item not in available]
+    if unknown:
+        raise ValueError(f"Unknown {label} ids: {unknown}")
+    return selected
 
 
 def feasible_set(

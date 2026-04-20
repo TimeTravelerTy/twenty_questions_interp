@@ -4,8 +4,8 @@
 > without reading anything else. Update the `Last updated` line on every session.
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
-**Last agent:** Claude (Opus 4.7)
-**Last updated:** 2026-04-19 (T=0.7 self-chosen replication done; choice collapse persists — salmon 96 / frog 24 / tiger 0 / eagle 0 across 120 attempts; geometry improved only 1.45× over T=0 and still 4.5× weaker than State B; 4-candidate self-chosen closed as a 4-way test, see `docs/progress/M3-selfchosen-ready-T07.md` and D-24)
+**Last agent:** Codex
+**Last updated:** 2026-04-20 (reviewed Claude's latest M3 handoff; repo remains aligned with the self-chosen-first plan, and `scripts/diagnose_selfchosen_ready.py` now supports `--candidates all` / `--question-ids all` directly so the 20-candidate self-chosen run no longer depends on a brittle explicit 20-id CLI string)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -55,11 +55,10 @@ required for M4.
    or (b) use the full bank. Default to (a) for comparability — the
    representational claim is about Ready-state, not question dynamics.
 2. Invoke `scripts/diagnose_selfchosen_ready.py` with the full 20-bank
-   subset (no `--candidates` → falls through to the `DEFAULT_CANDIDATES`
-   hardcoded 4; needs a trivial change to accept "all 20" either via
-   `--candidates $(full list)` or by making the default behaviour pull
-   from `load_bank()` when a sentinel like `--candidates all` is given.
-   Simpler fix: pass all 20 ids explicitly in the job script).
+   subset via `--candidates all`. Leave `--question-ids` at the 4 primary
+   questions by default for comparability; use `--question-ids all` only
+   if the run's purpose changes from Ready-state comparability to broader
+   dialogue characterization.
 3. On TSUBAME, submit T=0.0 first (to characterize the greedy
    distribution on the 20-candidate prompt) with generous `--max-attempts`
    (say 200) and `--n-per-candidate 2` as a quota floor. Expected runtime

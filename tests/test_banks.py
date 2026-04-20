@@ -1,4 +1,6 @@
-from twenty_q.banks import load_bank, subset_bank
+import pytest
+
+from twenty_q.banks import load_bank, resolve_id_selector, subset_bank
 
 
 def test_bank_shape():
@@ -39,3 +41,30 @@ def test_subset_bank_preserves_requested_order_and_answers():
     assert sub.question_ids == ("is_bird", "lives_primarily_in_water")
     assert sub.answer("salmon", "is_bird") == 0
     assert sub.answer("frog", "lives_primarily_in_water") == 1
+
+
+def test_resolve_id_selector_supports_all_sentinel():
+    bank = load_bank()
+
+    assert resolve_id_selector("all", bank.candidate_ids, label="candidate") == bank.candidate_ids
+    assert resolve_id_selector("ALL", bank.question_ids, label="question") == bank.question_ids
+
+
+def test_resolve_id_selector_preserves_order():
+    bank = load_bank()
+
+    resolved = resolve_id_selector(
+        "salmon,frog,eagle", bank.candidate_ids, label="candidate"
+    )
+
+    assert resolved == ("salmon", "frog", "eagle")
+
+
+def test_resolve_id_selector_rejects_duplicates_and_unknown_ids():
+    bank = load_bank()
+
+    with pytest.raises(ValueError, match="Duplicate candidate ids"):
+        resolve_id_selector("salmon,frog,salmon", bank.candidate_ids, label="candidate")
+
+    with pytest.raises(ValueError, match="Unknown question ids"):
+        resolve_id_selector("dragon", bank.question_ids, label="question")

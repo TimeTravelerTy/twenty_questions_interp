@@ -1,22 +1,25 @@
-"""Small self-chosen Ready-state diagnostic on the 4-candidate M3 smoke bank.
+"""Self-chosen Ready-state diagnostic for the M3 smoke bank.
 
 This is the direct follow-through from STATUS.md after D-21/H-rotation.
-We want the same 4 candidates and primary question set used in the
-`verbalized_index` persistence diagnostic, but now in the true self-chosen
-condition:
+By default it uses the same 4 candidates and primary question set used in the
+`verbalized_index` persistence diagnostic, but it can also run on the full
+20-animal bank via `--candidates all`.
 
-1. Present only the 4-candidate subset.
+The workflow is the same in either regime:
+
+1. Present the requested candidate subset.
 2. Capture the Ready-state activations.
 3. Run the primary yes/no questions.
 4. Ask for the secret at the end so each run can be labeled by the model's own
    chosen candidate.
-5. Compute Ready-state NC LOO and within-vs-between contrast across the 4
-   revealed secrets.
+5. Compute Ready-state NC LOO and within-vs-between contrast across the
+   realized revealed secrets.
 6. Optionally compare those Ready-state statistics against persistence
    State A vs State B to determine which regime self-chosen resembles.
 
 Usage:
     uv run python scripts/diagnose_selfchosen_ready.py --device auto --dtype bfloat16
+    uv run python scripts/diagnose_selfchosen_ready.py --candidates all --max-attempts 200
 """
 from __future__ import annotations
 
@@ -30,7 +33,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from twenty_q.banks import Bank, load_bank, subset_bank
+from twenty_q.banks import Bank, load_bank, resolve_id_selector, subset_bank
 from twenty_q.config import MODEL_MAIN
 from twenty_q.dialogue import (
     capture_ready_state,
@@ -63,8 +66,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="auto")
     p.add_argument("--dtype", default="float32", choices=["float32", "bfloat16", "float16"])
     p.add_argument("--out-dir", default="runs/diag/selfchosen_ready_smoke")
-    p.add_argument("--candidates", default=",".join(DEFAULT_CANDIDATES))
-    p.add_argument("--question-ids", default=",".join(DEFAULT_PRIMARY_QUESTION_IDS))
+    p.add_argument(
+        "--candidates",
+        default=",".join(DEFAULT_CANDIDATES),
+        help="Comma-separated candidate ids, or 'all' for the full bank.",
+    )
+    p.add_argument(
+        "--question-ids",
+        default=",".join(DEFAULT_PRIMARY_QUESTION_IDS),
+        help="Comma-separated question ids, or 'all' for the full question bank.",
+    )
     p.add_argument(
         "--n-per-candidate",
         type=int,
@@ -265,9 +276,13 @@ def _compare_against_persistence(
 
 def main() -> int:
     args = parse_args()
-    candidate_ids = tuple(x.strip() for x in args.candidates.split(",") if x.strip())
-    question_ids = tuple(x.strip() for x in args.question_ids.split(",") if x.strip())
     full_bank = load_bank()
+    candidate_ids = resolve_id_selector(
+        args.candidates, full_bank.candidate_ids, label="candidate"
+    )
+    question_ids = resolve_id_selector(
+        args.question_ids, full_bank.question_ids, label="question"
+    )
     bank = subset_bank(full_bank, candidate_ids=candidate_ids, question_ids=question_ids)
 
     dtype = {
