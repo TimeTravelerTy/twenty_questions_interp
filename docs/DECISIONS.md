@@ -459,7 +459,7 @@ Decision:
    12B self-chosen 20-bank dataset with enough runs per realized class for LOO
    or train/test readouts.
 
-## 2026-04-21 — D-29: 12B self-chosen Ready direct-fit is also weak; move probe position to State A/B
+## 2026-04-21 — D-29: 12B self-chosen Ready direct-fit is also weak; sweep mid-dialogue pre-answer positions before anything else
 
 D-28 said "fit probes directly on self-chosen Ready at 12B". That experiment
 has now run:
@@ -488,16 +488,28 @@ Decision:
    now stronger than D-23: it's not only "fit probes where you evaluate" —
    the Ready position itself does not carry enough self-chosen class signal
    to decode at this sample size, regardless of where you fit.
-2. **Shift the probing position, not the sample size.** The next test is
-   State A / State B at 12B self-chosen, replicating the D-21 H-rotation
-   finding from 4B. At 4B, self-chosen State B had ~104x the per-class
-   contrast of Ready; if that survives at 12B, State A/B is the right
-   probing position.
-3. **Do not keep increasing Ready-state self-chosen n at 12B** until (2)
+2. **Do not probe "State A / State B" in the self-chosen condition.** An
+   earlier draft of this entry proposed exactly that. It is incoherent:
+   State A / State B were defined (D-21) as residual-stream positions
+   *after* the model verbalizes the secret name in context (calibration or
+   post-reveal). Self-chosen by construction never lets the name enter
+   context, so there is no in-context State A/B to decode. Putting the name
+   in context to create State A would defeat the secrecy condition — that
+   is the calibration regime, not self-chosen.
+3. **Next probing position to test is mid-dialogue pre-answer.** Ready is
+   emitted immediately after the model commits; by the time the model has
+   answered 3-4 yes/no questions, the commitment has been exercised and
+   the choice may be more crystallized in the residual stream. The
+   `diagnose_selfchosen_ready.py` pipeline already captures
+   `turn_0k_activations.pt` at each pre-answer position, so this test
+   requires no new TSUBAME collection — just running LOO NC and LR at
+   turns 1..4 on the existing 40 kept runs.
+4. **Do not keep increasing Ready-state self-chosen n at 12B** until (3)
    resolves. More samples on a position that does not separate is not the
    most informative next experiment.
-4. **Open question kept on the backlog:** broader realized class diversity.
+5. **Open question kept on the backlog:** broader realized class diversity.
    Every 12B self-chosen collection so far (4-way narrowed, 20-bank, 20-bank
    direct-fit) has realized exactly `{elephant, cow, dog, horse}`. This is
-   a separate blocker from the probe-position question, but State A/B
-   readouts on those four will still answer whether H-rotation replicates.
+   a separate blocker from the probe-position question, but testing
+   mid-dialogue on those four will still answer whether the self-chosen
+   class code is decodable *anywhere* pre-reveal.

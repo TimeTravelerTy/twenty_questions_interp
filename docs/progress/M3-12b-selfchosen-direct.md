@@ -58,12 +58,17 @@ Best layers (top 5 by NC, then by LR):
    self-chosen geometry"; the issue is that **self-chosen Ready at 12B, on
    the currently realized class distribution, does not carry a reliably
    decodable class signal**.
-4. **The H-rotation story from D-21 is now the leading candidate
-   again at 12B.** At 4B, self-chosen Ready was 104× weaker than
-   matched persistence State B on contrast, but the same prompt at
-   State A/B carried clear class structure. If 12B behaves the same way,
-   Ready is simply the wrong position to probe for self-chosen identity —
-   we need State A or State B.
+4. **Mid-dialogue pre-answer positions are the next thing to test.** An
+   earlier draft of this section suggested State A / State B — that was a
+   category error. State A / State B only exist when the model puts the
+   secret name into context, which self-chosen forbids by construction
+   (see D-29). Within the self-chosen regime, the remaining lever on
+   *position* is not post-verbalization but mid-dialogue: by the time the
+   model has answered a few yes/no questions, the commitment has been
+   exercised and the chosen class may be more crystallized than at Ready.
+   `diagnose_selfchosen_ready.py` already captures
+   `turn_0k_activations.pt` for k=1..4 at each pre-answer position, so
+   this test can run directly on the 40 kept runs without new collection.
 
 ## Caveats and what this does *not* prove
 
@@ -86,14 +91,25 @@ Best layers (top 5 by NC, then by LR):
 Direct-fit at self-chosen Ready is not probe-ready at 12B. The scientific
 path forward splits:
 
-1. **Shift the probing position, not the training regime.** Rather than
-   keep chasing Ready-state self-chosen readouts, capture self-chosen
-   **State A / State B** activations at 12B and repeat the geometry
-   analysis. This is the H-rotation replication test: D-21 said at 4B,
-   Ready ≪ State B; does that still hold at 12B?
-2. **Improve self-chosen sample size / diversity only if (1) is strong.**
-   Scaling to 20+ runs/class or broadening the realized distribution is
-   only worthwhile if we can first show the geometry is there somewhere.
+1. **Sweep mid-dialogue pre-answer positions on the existing data.**
+   `turn_01..turn_04_activations.pt` are already captured per kept run.
+   Rerun LOO NC + LR at each of those positions and compare against the
+   Ready baseline in this doc. Real signal would look like a layer band
+   that is consistent across turns and sharpens with turn number; the
+   Ready pattern (isolated single-layer peaks, NC and LR peaks at
+   different layers) would look like noise. No new collection needed.
+2. **If mid-dialogue is also weak, shift to class diversity, not more
+   positions.** The narrow realized class set `{elephant,cow,dog,horse}`
+   is the most likely next bottleneck — all mammals, mostly domesticated.
+   Forcing realization diversity (T>0, seed sweep, prompt variants) is
+   cheaper than trying stronger regularization or PCA on 40 points.
+
+Explicitly *not* on the path: probing "State A / State B" in the
+self-chosen condition. Those positions were defined (D-21) as post-name-
+verbalization residual-stream states in the *persistence* regime. Self-
+chosen by construction never names the secret in context, so there is no
+analogous position to probe. A prior revision of this section proposed
+exactly that experiment; it was incoherent.
 
 ## Artifacts
 

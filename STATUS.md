@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M3 — TSUBAME + Gemma 3 12B, self-chosen Ready direct-fit is also weak; move to State A/B.
+**Current milestone:** M3 — TSUBAME + Gemma 3 12B, self-chosen Ready direct-fit is also weak; sweep mid-dialogue pre-answer positions next.
 **Last agent:** Claude
-**Last updated:** 2026-04-21 (12B self-chosen Ready direct-fit finished, job `7230807`. 300 attempts, 40 kept runs balanced 10/class on `{elephant,cow,dog,horse}`. LOO at Ready: NC mean 0.23 / max 0.45 at L14, LR mean 0.27 / max 0.45 at L4 (chance 0.25). Calibration on the same 4-way subset saturates at 1.00 by L6/L27. Direct-fit is barely above chance and peak layers disagree between NC and LR — this looks like noise plus weak signal. Decision: probe position, not training regime, is the bottleneck; H-rotation (D-21) is the leading hypothesis. See `docs/progress/M3-12b-selfchosen-direct.md`.)
+**Last updated:** 2026-04-21 (12B self-chosen Ready direct-fit finished, job `7230807`. 300 attempts, 40 kept runs balanced 10/class on `{elephant,cow,dog,horse}`. LOO at Ready: NC mean 0.23 / max 0.45 at L14, LR mean 0.27 / max 0.45 at L4 (chance 0.25). Calibration on the same 4-way subset saturates at 1.00 by L6/L27. Direct-fit is barely above chance. Original plan to probe State A/B was wrong — State A/B only exist when the model names the secret in context (persistence/calibration), which self-chosen forbids by construction. Revised next step: decode mid-dialogue pre-answer positions (`turn_01..turn_04_activations.pt` already captured) on the same kept subset, to test whether commitment sharpens once the model has answered a few yes/no questions. See `docs/progress/M3-12b-selfchosen-direct.md`.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -84,37 +84,49 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step:** replicate the H-rotation story (D-21) at 12B.
-Self-chosen *Ready* is weak both by transfer and by direct fit; the next
-test is whether State A / State B carry the class code at 12B the way they
-did at 4B. If they do, Ready has never been the right probing position and
-the readout pipeline moves to State A/B.
+**Next concrete step:** sweep **mid-dialogue pre-answer positions** on the
+existing 40-run direct-fit dataset. Ready is too early — the model has
+emitted only the word "Ready" and hasn't yet had its commitment tested.
+After a few yes/no answers, the chosen class may be more crystallized in
+the residual stream. This is the cheapest informative experiment: the data
+is already local (`attempt_XXX/turn_01..turn_04_activations.pt`).
 
-1. Write a TSUBAME job that runs a 12B self-chosen collection with the
-   post-Ready verbalization + State-A/State-B capture path — the same
-   one exercised by `diagnose_persistence.py` at 4B. Target ~10 runs on the
-   realized `{elephant,cow,dog,horse}` subset plus any classes that appear
-   under the 20-bank prompt. Capture activations at State A, State B, and
-   Ready.
-2. Locally, fit LOO NC and LR at State A and State B on the kept subset
-   (same 49-layer sweep as `M3-12b-selfchosen-direct.md`). Compare:
-   - Ready LOO (this doc, weak)
-   - State A LOO
-   - State B LOO
-   - matched persistence State B (12B, `7226546`) as the calibration-side
-     upper bound
-3. If State A/B LOO is strong (>=~80% at some layer), D-21 replicates at
-   12B and the probing position moves to State A/B for the rest of M3/M4.
-   Write `docs/progress/M3-12b-selfchosen-statesAB.md` and add D-29.
-4. If State A/B is also weak, the blocker is broader than H-rotation —
-   likely the narrow realized class set `{elephant,cow,dog,horse}`. In
-   that case, next step is forcing realization diversity (T=0.7 + prompt
-   variants) rather than more layers/positions.
+**Correction to the previous revision of this step:** I originally wrote
+"replicate D-21 by probing State A / State B at 12B self-chosen". That was
+wrong. State A / State B are *persistence-regime* positions — they only
+exist when the model puts the secret name into context (calibration or
+post-reveal). Self-chosen by construction never verbalizes the secret, so
+there is no in-context State A/B to decode. Any "State B at self-chosen"
+really means "some residual-stream position at which the secret has
+already been put in context", which defeats the secrecy condition.
+
+1. Extend `scripts/decode_ready.py` (or add a sibling `decode_turns.py`)
+   to load `turn_0k_activations.pt` at the pre-answer position for turns
+   1..4 on the kept 40 self-chosen runs, and run the same LOO NC + LR
+   sweep across all 49 layers. Scoring uses the reveal label (since this
+   is still the self-chosen condition).
+2. Compare against Ready-position baseline from
+   `docs/progress/M3-12b-selfchosen-direct.md`. Look for:
+   - turn-wise sharpening (does accuracy rise monotonically with turn
+     number, i.e. more commitment -> more signal?)
+   - a layer band that is consistent across turns (real signal) vs.
+     noisy single-layer peaks (the Ready pattern)
+3. If mid-dialogue positions are strong (say, >=70% LOO at some layer +
+   turn), self-chosen probing moves from Ready to a mid-dialogue position.
+   Write `docs/progress/M3-12b-selfchosen-turns.md` and add D-30.
+4. If mid-dialogue is *also* weak, the bottleneck is sample size / class
+   diversity, not position. Next in that branch:
+   - narrow class set `{elephant,cow,dog,horse}` is the most likely
+     culprit (all mammals, mostly domesticated)
+   - forced diversity (T>0, multi-seed prompt variants) comes before
+     revisiting positions
 
 **Do not:**
 - repeat 4-way narrowed self-chosen prompts (collapse is established)
-- keep chasing Ready-state self-chosen probes; the direct-fit ceiling
-  at n=40/4 classes is ~45% at a single layer, not probe-ready
+- probe "State A/B" in the self-chosen condition — the concept does not
+  apply there
+- keep adding Ready-state self-chosen runs until mid-dialogue positions
+  have been checked on the existing data
 
 **Open threads on the backlog:**
 - **Bigger-model ladder (D-05):** 4B's salmon attractor may be model-specific.
