@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M3 — TSUBAME + Gemma 3 12B, transfer verdict in; self-chosen direct-fit next.
-**Last agent:** Codex
-**Last updated:** 2026-04-21 (12B calibration -> self-chosen Ready transfer tested two ways. New 4-way self-chosen run on TSUBAME, job `7230657`, collapses to `{cow,horse}` only; balanced kept transfer at `L6/L17/L27/L48` is NC `0.35/0.00/0.00/0.10` and LR `0.00/0.00/0.00/0.10`. Retrospective transfer on the earlier 20-bank 12B slice is `0.125-0.25`, i.e. chance. Follow-up direct-fit collection on the natural 20-bank prompt has already been submitted as job `7230807` (`runs/diag/selfchosen_ready_20bank_12b_directfit_20260421/`). See `docs/progress/M3-12b-selfchosen-transfer.md`.)
+**Current milestone:** M3 — TSUBAME + Gemma 3 12B, self-chosen Ready direct-fit is also weak; move to State A/B.
+**Last agent:** Claude
+**Last updated:** 2026-04-21 (12B self-chosen Ready direct-fit finished, job `7230807`. 300 attempts, 40 kept runs balanced 10/class on `{elephant,cow,dog,horse}`. LOO at Ready: NC mean 0.23 / max 0.45 at L14, LR mean 0.27 / max 0.45 at L4 (chance 0.25). Calibration on the same 4-way subset saturates at 1.00 by L6/L27. Direct-fit is barely above chance and peak layers disagree between NC and LR — this looks like noise plus weak signal. Decision: probe position, not training regime, is the bottleneck; H-rotation (D-21) is the leading hypothesis. See `docs/progress/M3-12b-selfchosen-direct.md`.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -15,7 +15,8 @@ Do not headline calibration-only results.
 ## Next concrete step
 
 Prior notes, newest first:
-**`docs/progress/M3-12b-selfchosen-transfer.md`** (job `7230657`; plus retrospective 20-bank slice),
+**`docs/progress/M3-12b-selfchosen-direct.md`** (job `7230807`; direct-fit LOO local),
+`docs/progress/M3-12b-selfchosen-transfer.md` (job `7230657`; plus retrospective 20-bank slice),
 `docs/progress/M3-12b-pilot-readouts.md` (job `7226576`; readouts local),
 `docs/progress/M3-selfchosen-20bank.md` (jobs `7223018`, `7226501`, `7226502`, `7226538`, `7226546`, `7226547`),
 `docs/progress/M3-selfchosen-ready-T07.md` (job `7219788`),
@@ -56,10 +57,19 @@ Prior notes, newest first:
    NC `0.35/0.00/0.00/0.10` and LR `0.00/0.00/0.00/0.10`. On the earlier
    natural 20-bank 12B self-chosen slice (2 x `{elephant,cow,dog,horse}`),
    transfer is only `0.125-0.25`, i.e. chance.
+9. **Self-chosen Ready direct-fit is also weak (decisive).** Job `7230807`,
+   300 attempts on the 20-bank prompt, 40 kept runs balanced 10/class.
+   LOO over all 49 layers: NC mean 0.23 / max 0.45 @ L14; LR mean 0.27 /
+   max 0.45 @ L4 (chance 0.25). Best layers disagree between NC and LR,
+   consistent with noise + a weak underlying signal. Calibration on the
+   same 4 classes saturates at 1.00 from L6 (LR) / L27 (NC). So at 12B,
+   Ready-state self-chosen geometry itself is the bottleneck, **not**
+   calibration->self-chosen transfer.
 
-Bottom line: 4B self-chosen improved, but is still not probe-ready. At **12B**,
-`name_paraphrase` is good enough for calibration infrastructure, but
-calibration-trained Ready probes still do **not** transfer to self-chosen.
+Bottom line: at **12B**, `name_paraphrase` calibration is good infra, but
+Ready-state self-chosen readouts are not probe-ready either by transfer or
+by direct fit. The probe *position* — Ready, versus State A / State B —
+is now the leading hypothesis, reinforcing D-21.
 
 **Pilot done (2026-04-21):** 100-run 12B `name_paraphrase` calibration on
 `{elephant,cow,dog,horse}` with the six-question panel (job `7226576`). Local
@@ -74,24 +84,37 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step:** use the running 20-bank direct-fit collection to fit
-probes directly at self-chosen Ready on 12B.
+**Next concrete step:** replicate the H-rotation story (D-21) at 12B.
+Self-chosen *Ready* is weak both by transfer and by direct fit; the next
+test is whether State A / State B carry the class code at 12B the way they
+did at 4B. If they do, Ready has never been the right probing position and
+the readout pipeline moves to State A/B.
 
-1. Wait for / pull `runs/diag/selfchosen_ready_20bank_12b_directfit_20260421/`
-   from job `7230807`. Do **not** start another narrowed 4-way self-chosen run;
-   that collapse is now established.
-2. Use the partial-analysis output to identify the realized classes that reach
-   quota under the 20-bank prompt. Treat those self-chosen Ready activations as
-   the actual probe-training data.
-3. Fit NC and LR directly on self-chosen reveal labels (LOO on the realized
-   subset first; train/test only if the sample gets large enough).
-4. Compare self-chosen-direct readouts against the failed calibration ->
-   self-chosen transfer numbers in `docs/progress/M3-12b-selfchosen-transfer.md`.
-   If direct-fit is strong, lock M4 around self-chosen-trained probes and causal
-   patching. If direct-fit is weak too, the bottleneck is self-chosen geometry
-   itself, not transfer.
-5. Write `docs/progress/M3-12b-selfchosen-direct.md` and append the decision in
-   `docs/DECISIONS.md`.
+1. Write a TSUBAME job that runs a 12B self-chosen collection with the
+   post-Ready verbalization + State-A/State-B capture path — the same
+   one exercised by `diagnose_persistence.py` at 4B. Target ~10 runs on the
+   realized `{elephant,cow,dog,horse}` subset plus any classes that appear
+   under the 20-bank prompt. Capture activations at State A, State B, and
+   Ready.
+2. Locally, fit LOO NC and LR at State A and State B on the kept subset
+   (same 49-layer sweep as `M3-12b-selfchosen-direct.md`). Compare:
+   - Ready LOO (this doc, weak)
+   - State A LOO
+   - State B LOO
+   - matched persistence State B (12B, `7226546`) as the calibration-side
+     upper bound
+3. If State A/B LOO is strong (>=~80% at some layer), D-21 replicates at
+   12B and the probing position moves to State A/B for the rest of M3/M4.
+   Write `docs/progress/M3-12b-selfchosen-statesAB.md` and add D-29.
+4. If State A/B is also weak, the blocker is broader than H-rotation —
+   likely the narrow realized class set `{elephant,cow,dog,horse}`. In
+   that case, next step is forcing realization diversity (T=0.7 + prompt
+   variants) rather than more layers/positions.
+
+**Do not:**
+- repeat 4-way narrowed self-chosen prompts (collapse is established)
+- keep chasing Ready-state self-chosen probes; the direct-fit ceiling
+  at n=40/4 classes is ~45% at a single layer, not probe-ready
 
 **Open threads on the backlog:**
 - **Bigger-model ladder (D-05):** 4B's salmon attractor may be model-specific.

@@ -458,3 +458,46 @@ Decision:
    directly on self-chosen Ready.** The next productive artifact is a larger
    12B self-chosen 20-bank dataset with enough runs per realized class for LOO
    or train/test readouts.
+
+## 2026-04-21 — D-29: 12B self-chosen Ready direct-fit is also weak; move probe position to State A/B
+
+D-28 said "fit probes directly on self-chosen Ready at 12B". That experiment
+has now run:
+
+- collection: job `7230807`, 20-bank prompt, T=0.0, 300 attempts
+- realized classes: `{elephant, cow, dog, horse}` (same 4 as every previous
+  12B self-chosen collection; narrowing does not broaden the distribution)
+- kept: 40 runs balanced at 10/class, primary-correct on the 4-question panel
+- scoring: LOO NC and LR at every layer, chance 25%
+
+Result (see `docs/progress/M3-12b-selfchosen-direct.md`):
+
+- NC LOO: mean **0.23**, median 0.22, max **0.45 @ L14**
+- LR LOO: mean **0.27**, median 0.28, max **0.45 @ L4**
+- best NC and LR layers disagree (L14 vs L4); no coherent band of high
+  accuracy across depth
+
+Compare to 12B calibration on the same 4 classes: LR LOO 1.00 from L6; NC
+LOO 1.00 from L27. Direct-fit at self-chosen Ready is ~chance on average
+with ~1.8x-chance single-layer peaks that look more like multiple-testing
+noise than a real code.
+
+Decision:
+
+1. **Self-chosen Ready is not a probe-ready position at 12B.** The rule is
+   now stronger than D-23: it's not only "fit probes where you evaluate" —
+   the Ready position itself does not carry enough self-chosen class signal
+   to decode at this sample size, regardless of where you fit.
+2. **Shift the probing position, not the sample size.** The next test is
+   State A / State B at 12B self-chosen, replicating the D-21 H-rotation
+   finding from 4B. At 4B, self-chosen State B had ~104x the per-class
+   contrast of Ready; if that survives at 12B, State A/B is the right
+   probing position.
+3. **Do not keep increasing Ready-state self-chosen n at 12B** until (2)
+   resolves. More samples on a position that does not separate is not the
+   most informative next experiment.
+4. **Open question kept on the backlog:** broader realized class diversity.
+   Every 12B self-chosen collection so far (4-way narrowed, 20-bank, 20-bank
+   direct-fit) has realized exactly `{elephant, cow, dog, horse}`. This is
+   a separate blocker from the probe-position question, but State A/B
+   readouts on those four will still answer whether H-rotation replicates.

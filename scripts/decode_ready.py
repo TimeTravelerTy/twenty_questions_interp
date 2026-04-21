@@ -142,6 +142,12 @@ def parse_args() -> argparse.Namespace:
                    help="Directory containing self-chosen run subdirectories.")
     p.add_argument("--sc-selection", default="all", choices=["all", "kept"],
                    help="Which self-chosen runs to score when sc-dir is a diagnostic output.")
+    p.add_argument("--cal-selection", default="all", choices=["all", "kept"],
+                   help="Which calibration runs to use when cal-dir is a diagnostic output "
+                        "(use 'kept' to fit probes on the balanced kept subset).")
+    p.add_argument("--cal-label", default="calibration",
+                   help="Short label used in log lines for the training-side runs "
+                        "(e.g. 'self-chosen' when fitting direct-fit at Ready).")
     p.add_argument("--out-report-json",
                    default=str(REPO_ROOT / "runs" / "m2_report.json"),
                    help="Path for machine-readable JSON report.")
@@ -162,9 +168,9 @@ def main() -> int:
     # First pass without filter to auto-detect model_name if the user didn't set one.
     model_name = args.model_name
     if model_name is None:
-        probe = load_runs(cal_dir)
+        probe = load_runs(cal_dir, selection=args.cal_selection)
         if not probe:
-            print(f"No calibration runs found under {cal_dir}; "
+            print(f"No {args.cal_label} runs found under {cal_dir}; "
                   "run scripts/run_calibration.py first.", file=sys.stderr)
             return 2
         model_name = probe[0][0].model_name
@@ -172,12 +178,13 @@ def main() -> int:
               f"(override with --model-name).")
 
     cal = load_runs(cal_dir, model_name=model_name,
-                    prompt_template_id=args.prompt_template_id)
+                    prompt_template_id=args.prompt_template_id,
+                    selection=args.cal_selection)
     sc = load_runs(sc_dir, model_name=model_name,
                    prompt_template_id=args.prompt_template_id,
                    selection=args.sc_selection)
     if not cal:
-        print("No calibration runs matched the model_name/prompt filter.", file=sys.stderr)
+        print(f"No {args.cal_label} runs matched the model_name/prompt filter.", file=sys.stderr)
         return 2
     # Sanity: all retained runs must agree on hidden_size.
     hidden_sizes = {m.hidden_size for m, _ in cal + sc if m.hidden_size is not None}
@@ -185,9 +192,23 @@ def main() -> int:
         print(f"[decode_ready] Mixed hidden_sizes {hidden_sizes}; aborting.", file=sys.stderr)
         return 2
 
-    cal_secrets = [m.secret_canonical_id for m, _ in cal]
+    # Calibration runs pin their secret in `secret_canonical_id`; self-chosen runs
+    # only have `reveal_canonical_id`. Direct-fit at Ready on self-chosen data
+    # reuses this pipeline with `--cal-dir` pointing at a diagnostic output, so
+    # fall back to reveal when the secret is absent.
+    cal_secrets: list[str] = []
+    for m, _ in cal:
+        label = m.secret_canonical_id or m.reveal_canonical_id
+        if label is None:
+            print(
+                f"[decode_ready] run {m.run_id!r} has neither secret nor reveal "
+                "canonical id; cannot label.",
+                file=sys.stderr,
+            )
+            return 2
+        cal_secrets.append(label)
     cal_X_all = np.stack([a for _, a in cal], axis=0)  # (N, n_layers+1, hidden_size)
-    print(f"Calibration runs: {len(cal)}   activations shape: {cal_X_all.shape}")
+    print(f"{args.cal_label.capitalize()} runs: {len(cal)}   activations shape: {cal_X_all.shape}")
 
     if sc:
         sc_X_all = np.stack([a for _, a in sc], axis=0)
