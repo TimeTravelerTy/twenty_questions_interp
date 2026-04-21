@@ -140,7 +140,11 @@ def main() -> int:
         print("Self-chosen runs: 0 (skipping self-chosen transfer).")
 
     n_layers_plus_1 = cal_X_all.shape[1]
-    class_ids = list(bank.candidate_ids)
+    # Restrict the decoder's class set to classes actually present in the calibration
+    # data. Passing the full bank poisons NC centroids with NaNs for any class that
+    # has no runs (the original M2 smoke had all 20, so this only surfaced once a
+    # pilot used a subset).
+    class_ids = sorted(set(cal_secrets))
     attr_ids = [x.strip() for x in args.attr_subset.split(",") if x.strip()]
 
     report = {

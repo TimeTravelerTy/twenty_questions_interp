@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M3 — TSUBAME + Gemma 3 4B, full calibration dataset.
-**Last agent:** Codex
-**Last updated:** 2026-04-20 (12B matched controls closed: `name_paraphrase` calibration on the realized 4-way subset cleared the gate at 47/48 = 97.9% in job `7226547`; persistence stayed strong in `7226546`; calibration is now standardized at 12B and the next step is pilot Ready-state data collection with that schema)
+**Current milestone:** M3 — TSUBAME + Gemma 3 12B, pilot calibration + first readouts.
+**Last agent:** Claude
+**Last updated:** 2026-04-21 (12B `name_paraphrase` pilot collected on TSUBAME in job `7226576`: 100/100 runs, 25×{elephant,cow,dog,horse}. First Ready-state readouts trained locally via `scripts/decode_ready.py` on the six-question discriminative panel: LR LOO saturates at 1.00 by L6, NC LOO climbs 0.25→1.00 by L27, attribute decoders 1.00 from L7. See `docs/progress/M3-12b-pilot-readouts.md`. Also fixed a latent NC class-set bug that only surfaces on subset pilots; committed with the report.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not publish calibration-only results as the headline.
@@ -15,7 +15,8 @@ Do not publish calibration-only results as the headline.
 ## Next concrete step
 
 Prior notes in order of recency:
-**`docs/progress/M3-selfchosen-20bank.md`** (jobs `7223018`, `7226501`, `7226502`),
+**`docs/progress/M3-12b-pilot-readouts.md`** (job `7226576`; readouts local),
+`docs/progress/M3-selfchosen-20bank.md` (jobs `7223018`, `7226501`, `7226502`, `7226538`, `7226546`, `7226547`),
 `docs/progress/M3-selfchosen-ready-T07.md` (job `7219788`),
 `docs/progress/M3-selfchosen-ready-smoke.md` (job `7218660`),
 `docs/progress/M3-h-persistence.md` (job `7218322`),
@@ -23,7 +24,7 @@ Prior notes in order of recency:
 `docs/progress/M3-3cond-binding-smoke.md` (job `7218265`),
 `docs/progress/M3-4cond-binding-smoke.md`, `docs/progress/M3-4b-smoke-diagnostics.md`.
 
-**Result so far (4B diagnosed; 12B calibration unlocked):**
+**Result so far (12B calibration readouts green; next is self-chosen transfer):**
 
 1. **The 20-bank prompt is a real improvement over the 4-candidate panel.**
    Greedy 4B no longer collapses to just salmon/frog. Over 200 attempts the
@@ -57,24 +58,45 @@ Conclusion: 4B self-chosen is better with the 20-bank prompt, but 4B is still
 not in a probe-ready regime. At **12B**, calibration is no longer the blocker:
 `name_paraphrase` is good enough to use as probe-training infrastructure.
 
-**Next concrete step:** launch a pilot 12B Ready-state calibration collection
-with the validated schema:
+**Pilot done (2026-04-21):** 100-run 12B `name_paraphrase` calibration collected
+on `{elephant,cow,dog,horse}` with the six-question discriminative panel
+(job `7226576`). Readouts trained locally at Ready across all 49 layers:
 
-- model: `google/gemma-3-12b-it`
-- schema: **`name_paraphrase`**
-- candidates: `elephant,cow,dog,horse`
-- questions:
-  `is_carnivore,is_larger_than_human,is_domesticated,lives_in_africa,produces_dairy_milk,is_ridden_by_humans`
+- **LR LOO saturates at 1.00 by L6**, stays saturated to L48.
+- **NC LOO climbs 0.25→0.66 @ L7→0.93 @ L16→1.00 from L27.**
+- Six binary attribute decoders all 1.00 from L7 (trivial at 4 classes × 25).
 
-1. Use `scripts/run_calibration.py --schema name_paraphrase` to collect a pilot
-   dataset on the validated 4-way subset at 12B.
-2. Start with a modest but probe-usable size (for example 25–50 runs per class)
-   rather than jumping straight to the old ~2k 4B target.
-3. Train the first dense Ready-state readouts on that pilot:
-   - candidate decoder
-   - attribute decoders for the six-question panel
-4. Only after those readouts behave sensibly on held-out calibration runs decide
-   whether to scale the same 12B schema to a broader candidate/question set.
+The LR ≫ NC gap at L6–L26 is the non-trivial structural signal: candidate
+identity is linearly available in the residual stream from ~1/4 depth,
+but the per-class clusters are not spherical until much deeper. Full
+analysis: `docs/progress/M3-12b-pilot-readouts.md`; per-layer table:
+`docs/progress/M3-12b-pilot-readouts-detail.md`.
+
+**Next concrete step:** the scientific test this whole arc has been
+building toward — probe transfer from calibration Ready to self-chosen
+Ready at 12B on the same 4-way subset.
+
+1. Collect a 12B self-chosen Ready run on `{elephant,cow,dog,horse}` (or
+   the realized 12B subset if it broadens on re-run) using the same
+   six-question panel and `name_paraphrase`-compatible self-chosen prompt.
+   Use `scripts/diagnose_selfchosen_ready.py` with an explicit candidate
+   list and `--question-ids is_carnivore,is_larger_than_human,
+   is_domesticated,lives_in_africa,produces_dairy_milk,is_ridden_by_humans`.
+   Target ~10 runs per realized class.
+2. Fit NC and LR at Ready on the 100-run calibration pilot (layers of
+   interest: L6 (LR's earliest perfect layer), L17 (NC's turn-on layer),
+   L27 (NC saturation), L48 (last)).
+3. Evaluate those probes on the self-chosen runs. Headline metric: probe
+   agreement with the self-chosen reveal label. This is the direct test
+   of whether calibration-position probes transfer to the self-chosen
+   position at 12B — i.e. whether H-rotation (D-21) at 4B was a
+   small-model artifact or persists at 12B.
+4. If transfer is weak (say <70% at every layer), the probe-training
+   location conclusion from D-23 reinforces: we would need to fit probes
+   at self-chosen directly, which requires enough self-chosen runs per
+   class, which loops back to collecting a full 12B self-chosen dataset.
+5. Write `docs/progress/M3-12b-selfchosen-transfer.md` and update STATUS
+   + DECISIONS.md (expected: adds a D-25 entry summarizing 12B transfer).
 
 **Open threads kept deliberately on the backlog, not closed:**
 - **Bigger-model ladder (D-05):** 4B's salmon attractor may be model-specific.
