@@ -25,6 +25,7 @@ from twenty_q.config import CALIBRATION_RUNS_DIR, REPO_ROOT, SELFCHOSEN_RUNS_DIR
 from twenty_q.manifest import RunManifest
 from twenty_q.readouts import (
     attribute_labels,
+    fit_logreg,
     fit_nearest_centroid,
     loo_accuracy_binary,
     loo_accuracy_logreg,
@@ -36,6 +37,7 @@ def load_runs(
     run_root: Path,
     model_name: str | None = None,
     prompt_template_id: str | None = None,
+    selection: str = "all",
 ) -> list[tuple[RunManifest, np.ndarray]]:
     """Returns (manifest, activations[n_layers+1, hidden_size]) for each run in `run_root`.
 
@@ -47,17 +49,34 @@ def load_runs(
     skipped: list[str] = []
     if not run_root.exists():
         return out
-    for sub in sorted(run_root.iterdir()):
-        m_path = sub / "manifest.json"
-        a_path = sub / "activations.pt"
-        if not (m_path.exists() and a_path.exists()):
-            continue
+    run_paths: list[tuple[Path, Path, str]] = []
+    results_path = run_root / "results.json"
+    if selection == "kept" and results_path.exists():
+        with results_path.open() as f:
+            results = json.load(f)
+        for row in results.get("kept_rows", []):
+            manifest_path = Path(row["manifest_path"])
+            activation_path = Path(row["ready_state_path"])
+            if not manifest_path.exists():
+                manifest_path = run_root / row["run_id"] / "manifest.json"
+            if not activation_path.exists():
+                activation_path = run_root / row["run_id"] / "activations.pt"
+            run_paths.append((manifest_path, activation_path, manifest_path.parent.name))
+    else:
+        for sub in sorted(run_root.iterdir()):
+            m_path = sub / "manifest.json"
+            a_path = sub / "activations.pt"
+            if not (m_path.exists() and a_path.exists()):
+                continue
+            run_paths.append((m_path, a_path, sub.name))
+
+    for m_path, a_path, label in run_paths:
         manifest = RunManifest.load(m_path)
         if model_name is not None and manifest.model_name != model_name:
-            skipped.append(f"{sub.name} (model_name={manifest.model_name!r})")
+            skipped.append(f"{label} (model_name={manifest.model_name!r})")
             continue
         if prompt_template_id is not None and manifest.prompt_template_id != prompt_template_id:
-            skipped.append(f"{sub.name} (prompt_template_id={manifest.prompt_template_id!r})")
+            skipped.append(f"{label} (prompt_template_id={manifest.prompt_template_id!r})")
             continue
         activations = torch.load(a_path, map_location="cpu").numpy()
         out.append((manifest, activations))
@@ -71,10 +90,45 @@ def load_runs(
     return out
 
 
+def parse_layer_selector(layer_spec: str, n_layers_plus_1: int) -> list[int]:
+    if layer_spec.strip().lower() == "all":
+        return list(range(n_layers_plus_1))
+
+    layers: list[int] = []
+    seen: set[int] = set()
+    for raw in layer_spec.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        layer = int(raw)
+        if layer < 0 or layer >= n_layers_plus_1:
+            raise ValueError(
+                f"Layer {layer} out of range for activations with {n_layers_plus_1} layers."
+            )
+        if layer not in seen:
+            layers.append(layer)
+            seen.add(layer)
+    if not layers:
+        raise ValueError("No valid layers selected.")
+    return layers
+
+
+def agreement_with_reveal(
+    runs: list[tuple[RunManifest, np.ndarray]], preds: list[str]
+) -> float | None:
+    matched = [(m.reveal_canonical_id, p) for (m, _), p in zip(runs, preds, strict=True)]
+    with_reveal = [(r, p) for r, p in matched if r is not None]
+    if not with_reveal:
+        return None
+    return sum(1 for r, p in with_reveal if r == p) / len(with_reveal)
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--attr-subset", default="is_mammal,is_bird,is_carnivore,lives_in_africa",
                    help="Comma-separated question ids for binary-attribute sweep.")
+    p.add_argument("--layers", default="all",
+                   help="Comma-separated layer ids to score, or 'all'.")
     p.add_argument("--model-name", default=None,
                    help="Restrict to runs with this model_name. Defaults to the "
                         "model_name of the first calibration run found.")
@@ -86,6 +140,8 @@ def parse_args() -> argparse.Namespace:
                    help="Directory containing calibration run subdirectories.")
     p.add_argument("--sc-dir", default=str(SELFCHOSEN_RUNS_DIR),
                    help="Directory containing self-chosen run subdirectories.")
+    p.add_argument("--sc-selection", default="all", choices=["all", "kept"],
+                   help="Which self-chosen runs to score when sc-dir is a diagnostic output.")
     p.add_argument("--out-report-json",
                    default=str(REPO_ROOT / "runs" / "m2_report.json"),
                    help="Path for machine-readable JSON report.")
@@ -118,7 +174,8 @@ def main() -> int:
     cal = load_runs(cal_dir, model_name=model_name,
                     prompt_template_id=args.prompt_template_id)
     sc = load_runs(sc_dir, model_name=model_name,
-                   prompt_template_id=args.prompt_template_id)
+                   prompt_template_id=args.prompt_template_id,
+                   selection=args.sc_selection)
     if not cal:
         print("No calibration runs matched the model_name/prompt filter.", file=sys.stderr)
         return 2
@@ -145,7 +202,14 @@ def main() -> int:
     # has no runs (the original M2 smoke had all 20, so this only surfaced once a
     # pilot used a subset).
     class_ids = sorted(set(cal_secrets))
-    attr_ids = [x.strip() for x in args.attr_subset.split(",") if x.strip()]
+    attr_ids = []
+    if args.attr_subset.strip().lower() not in {"", "none"}:
+        attr_ids = [x.strip() for x in args.attr_subset.split(",") if x.strip()]
+    try:
+        layers = parse_layer_selector(args.layers, n_layers_plus_1)
+    except ValueError as exc:
+        print(f"[decode_ready] {exc}", file=sys.stderr)
+        return 2
 
     report = {
         "filter": {
@@ -155,15 +219,18 @@ def main() -> int:
         "n_calibration_runs": len(cal),
         "n_selfchosen_runs": len(sc),
         "class_ids": class_ids,
+        "attribute_ids": attr_ids,
+        "selected_layers": layers,
         "layers": [],
     }
     lines: list[str] = []
-    lines.append("| layer | NC LOO | LR LOO | " + " | ".join(
-        f"{a[:18]}" for a in attr_ids
-    ) + " | SC-agree |")
-    lines.append("|---|---|---|" + "|".join("---" for _ in attr_ids) + "|---|")
+    table_header = ["layer", "NC LOO", "LR LOO"] + [
+        a[:18] for a in attr_ids
+    ] + ["SC-NC", "SC-LR"]
+    lines.append("| " + " | ".join(table_header) + " |")
+    lines.append("|" + "|".join("---" for _ in table_header) + "|")
 
-    for layer in range(n_layers_plus_1):
+    for layer in layers:
         X_cal = cal_X_all[:, layer, :]
         nc_acc = loo_accuracy_nearest_centroid(X_cal, cal_secrets, class_ids)
         lr_acc = loo_accuracy_logreg(X_cal, cal_secrets, class_ids)
@@ -172,18 +239,18 @@ def main() -> int:
             y = attribute_labels(cal_secrets, bank, qid)
             attr_accs[qid] = loo_accuracy_binary(X_cal, y)
 
-        # Self-chosen transfer: fit centroid on ALL calibration, predict SC, compare to reveal.
-        sc_agreement: float | None = None
+        # Self-chosen transfer: fit decoders on ALL calibration, predict SC, compare to reveal.
+        sc_agreement_nc: float | None = None
+        sc_agreement_lr: float | None = None
         if sc_X_all is not None:
-            dec = fit_nearest_centroid(X_cal, cal_secrets, class_ids)
-            sc_preds = dec.predict(sc_X_all[:, layer, :])
-            matched = [
-                (m.reveal_canonical_id, p)
-                for (m, _), p in zip(sc, sc_preds, strict=True)
-            ]
-            with_reveal = [(r, p) for r, p in matched if r is not None]
-            if with_reveal:
-                sc_agreement = sum(1 for r, p in with_reveal if r == p) / len(with_reveal)
+            dec_nc = fit_nearest_centroid(X_cal, cal_secrets, class_ids)
+            sc_agreement_nc = agreement_with_reveal(
+                sc, dec_nc.predict(sc_X_all[:, layer, :])
+            )
+            dec_lr = fit_logreg(X_cal, cal_secrets)
+            sc_agreement_lr = agreement_with_reveal(
+                sc, dec_lr.predict(sc_X_all[:, layer, :])
+            )
 
         row = {
             "layer": layer,
@@ -191,17 +258,28 @@ def main() -> int:
             "logreg_loo": lr_acc,
             "attribute_loo": {k: v[0] for k, v in attr_accs.items()},
             "attribute_majority_baseline": {k: v[1] for k, v in attr_accs.items()},
-            "selfchosen_decoder_vs_reveal_agreement": sc_agreement,
+            "selfchosen_decoder_vs_reveal_agreement": sc_agreement_nc,
+            "selfchosen_nearest_centroid_vs_reveal_agreement": sc_agreement_nc,
+            "selfchosen_logreg_vs_reveal_agreement": sc_agreement_lr,
         }
         report["layers"].append(row)
 
-        attr_cells = " | ".join(f"{attr_accs[q][0]:.2f}" for q in attr_ids)
-        sc_cell = f"{sc_agreement:.2f}" if sc_agreement is not None else "n/a"
-        lines.append(f"| {layer} | {nc_acc:.2f} | {lr_acc:.2f} | {attr_cells} | {sc_cell} |")
+        row_cells = [f"{layer}", f"{nc_acc:.2f}", f"{lr_acc:.2f}"]
+        row_cells.extend(f"{attr_accs[q][0]:.2f}" for q in attr_ids)
+        row_cells.append(
+            f"{sc_agreement_nc:.2f}" if sc_agreement_nc is not None else "n/a"
+        )
+        row_cells.append(
+            f"{sc_agreement_lr:.2f}" if sc_agreement_lr is not None else "n/a"
+        )
+        lines.append("| " + " | ".join(row_cells) + " |")
         attr_print = {k: f"{v[0]:.2f}" for k, v in attr_accs.items()}
+        attrs_blurb = f"  attrs={attr_print}" if attr_ids else ""
+        sc_nc_cell = f"{sc_agreement_nc:.2f}" if sc_agreement_nc is not None else "n/a"
+        sc_lr_cell = f"{sc_agreement_lr:.2f}" if sc_agreement_lr is not None else "n/a"
         print(
             f"  layer {layer:2d}  NC={nc_acc:.2f}  LR={lr_acc:.2f}  "
-            f"attrs={attr_print}  SC={sc_cell}"
+            f"SC-NC={sc_nc_cell}  SC-LR={sc_lr_cell}{attrs_blurb}"
         )
 
     # Persist machine-readable report + markdown table.

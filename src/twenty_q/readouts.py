@@ -38,6 +38,15 @@ class NearestCentroidDecoder:
         return [self.class_ids[i] for i in idx]
 
 
+@dataclass
+class LogregDecoder:
+    scaler: StandardScaler
+    clf: LogisticRegression
+
+    def predict(self, X: np.ndarray) -> list[str]:
+        return [str(x) for x in self.clf.predict(self.scaler.transform(X))]
+
+
 def fit_nearest_centroid(
     X: np.ndarray, y: list[str], class_ids: list[str] | None = None
 ) -> NearestCentroidDecoder:
@@ -46,6 +55,13 @@ def fit_nearest_centroid(
         [X[[i for i, yy in enumerate(y) if yy == c]].mean(axis=0) for c in class_ids]
     )
     return NearestCentroidDecoder(class_ids=class_ids, centroids=centroids)
+
+
+def fit_logreg(X: np.ndarray, y: list[str], C: float = 1.0) -> LogregDecoder:
+    scaler = StandardScaler().fit(X)
+    clf = LogisticRegression(max_iter=2000, C=C, solver="lbfgs")
+    clf.fit(scaler.transform(X), y)
+    return LogregDecoder(scaler=scaler, clf=clf)
 
 
 def loo_accuracy_nearest_centroid(
@@ -67,17 +83,14 @@ def loo_accuracy_logreg(
     X: np.ndarray, y: list[str], class_ids: list[str], C: float = 1.0
 ) -> float:
     """Leave-one-run-out accuracy with multinomial logistic regression."""
+    del class_ids  # The fitted classifier infers its own active class set.
     n = len(y)
     correct = 0
     for i in range(n):
         mask = np.ones(n, dtype=bool)
         mask[i] = False
-        scaler = StandardScaler().fit(X[mask])
-        X_train = scaler.transform(X[mask])
-        X_test = scaler.transform(X[i : i + 1])
-        clf = LogisticRegression(max_iter=2000, C=C, solver="lbfgs")
-        clf.fit(X_train, [y[j] for j in range(n) if mask[j]])
-        pred = clf.predict(X_test)[0]
+        dec = fit_logreg(X[mask], [y[j] for j in range(n) if mask[j]], C=C)
+        pred = dec.predict(X[i : i + 1])[0]
         correct += int(pred == y[i])
     return correct / n
 
