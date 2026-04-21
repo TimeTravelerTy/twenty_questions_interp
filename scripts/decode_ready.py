@@ -82,28 +82,42 @@ def parse_args() -> argparse.Namespace:
                    help="Restrict to runs with this prompt_template_id. Note: "
                         "calibration and self-chosen use different templates; "
                         "this filter is applied per-condition independently.")
+    p.add_argument("--cal-dir", default=str(CALIBRATION_RUNS_DIR),
+                   help="Directory containing calibration run subdirectories.")
+    p.add_argument("--sc-dir", default=str(SELFCHOSEN_RUNS_DIR),
+                   help="Directory containing self-chosen run subdirectories.")
+    p.add_argument("--out-report-json",
+                   default=str(REPO_ROOT / "runs" / "m2_report.json"),
+                   help="Path for machine-readable JSON report.")
+    p.add_argument("--out-md",
+                   default=str(REPO_ROOT / "docs" / "progress" / "M2-ready-smoke-test.md"),
+                   help="Path for markdown layer-sweep table.")
+    p.add_argument("--title", default="M2 - Ready-state decoder smoke test",
+                   help="Heading used in the generated markdown report.")
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     bank = load_bank()
+    cal_dir = Path(args.cal_dir)
+    sc_dir = Path(args.sc_dir)
 
     # First pass without filter to auto-detect model_name if the user didn't set one.
     model_name = args.model_name
     if model_name is None:
-        probe = load_runs(CALIBRATION_RUNS_DIR)
+        probe = load_runs(cal_dir)
         if not probe:
-            print("No calibration runs found; run scripts/run_calibration.py first.",
-                  file=sys.stderr)
+            print(f"No calibration runs found under {cal_dir}; "
+                  "run scripts/run_calibration.py first.", file=sys.stderr)
             return 2
         model_name = probe[0][0].model_name
         print(f"[decode_ready] Auto-filtering on model_name={model_name!r} "
               f"(override with --model-name).")
 
-    cal = load_runs(CALIBRATION_RUNS_DIR, model_name=model_name,
+    cal = load_runs(cal_dir, model_name=model_name,
                     prompt_template_id=args.prompt_template_id)
-    sc = load_runs(SELFCHOSEN_RUNS_DIR, model_name=model_name,
+    sc = load_runs(sc_dir, model_name=model_name,
                    prompt_template_id=args.prompt_template_id)
     if not cal:
         print("No calibration runs matched the model_name/prompt filter.", file=sys.stderr)
@@ -187,18 +201,21 @@ def main() -> int:
         )
 
     # Persist machine-readable report + markdown table.
-    report_path = REPO_ROOT / "runs" / "m2_report.json"
+    report_path = Path(args.out_report_json)
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("w") as f:
         json.dump(report, f, indent=2)
     print(f"\nWrote {report_path}")
 
-    md_path = REPO_ROOT / "docs" / "progress" / "M2-ready-smoke-test.md"
+    md_path = Path(args.out_md)
     md_path.parent.mkdir(parents=True, exist_ok=True)
+    n_classes = len(set(cal_secrets))
+    chance = 1.0 / n_classes if n_classes else 0.0
     header = (
-        "# M2 - Ready-state decoder smoke test\n\n"
+        f"# {args.title}\n\n"
         f"Runs: {len(cal)} calibration, {len(sc)} self-chosen.\n"
-        f"Chance baselines: 20-way = 0.05; attribute majority varies per question.\n\n"
+        f"Model: {model_name}. Classes: {n_classes} "
+        f"(NC/LR chance = {chance:.3f}).\n\n"
     )
     md_path.write_text(header + "\n".join(lines) + "\n")
     print(f"Wrote {md_path}")
