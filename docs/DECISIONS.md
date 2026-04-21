@@ -548,3 +548,39 @@ Decision:
 3. **Scale data at the winning position next.** The next productive artifact is
    a larger 12B self-chosen 20-bank collection, analyzed primarily at late
    turn-4 layers (`~L42–L48`).
+
+## 2026-04-21 — D-31: Turn-4 pre-answer survives scale-up; probe position is locked, class diversity is the next blocker
+
+The D-30 scale-up (job `7232075`, 600 attempts, 80 kept = 20 x
+`{elephant,cow,dog,horse}`) sharpens the turn-4 signal well past the
+probe-ready threshold (see `docs/progress/M3-12b-selfchosen-turn4scale.md`):
+
+- turn 4 LR LOO **0.787 @ L31**, NC **0.662 @ L29** (chance 0.25)
+- turn 4 L27-48 **LR mean 0.731**, NC mean 0.558
+- turn 1 L27-48 LR mean 0.431 (above chance but far below turn 4)
+- compared to the n=40 pilot, **LR jumps +0.19 in both mean and max** while
+  NC barely moves — consistent with linearly separable geometry that was
+  regularization-starved at n=40
+
+The scale-up did not create a new signal; it sharpened the pilot signal
+into a robust one. The STATUS threshold "~70% regime to lock this probe
+position" is cleared.
+
+Decision:
+
+1. **Turn-4 pre-answer, late layers (L26-L48, peaks L29-L31) is the locked
+   self-chosen probe position for M4.** Causal patching, SAE feature case
+   studies, and the blog-post readout all build on this position.
+2. **The probe-position question is closed.** Further sweeping of alternative
+   residual positions on this dataset is not a useful next step unless a
+   specific causal-patching experiment needs a different index.
+3. **The next blocker is realized-class diversity, not position.** Every
+   12B greedy self-chosen collection so far realizes only
+   `{elephant, cow, dog, horse}`. LR 0.79 at 4 classes is compelling
+   infrastructure; the scientific claim needs to show the signal survives
+   a broader class set. Attack that via T>0 sampling on the same 20-bank
+   prompt before falling back to prompt variants.
+4. **Do not re-open Ready** as a probing position for self-chosen. The
+   Ready-vs-turn-4 gap (LR mean 0.27 vs 0.73 on the pilot; 0.34 vs 0.73
+   on scale-up turn-1 L27-48, which sits in between) is too large to
+   plausibly flip with more samples.

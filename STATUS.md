@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M3 — TSUBAME + Gemma 3 12B, turn-4 pre-answer beats Ready; scale that position next.
-**Last agent:** Codex
-**Last updated:** 2026-04-21 (Ran the planned mid-dialogue sweep on the kept 40 self-chosen runs from job `7230807`. Turn 4 pre-answer is materially stronger than Ready: NC mean 0.40 / max 0.625 @ L44, LR mean 0.40 / max 0.60 @ L42, versus Ready NC mean 0.23 / LR mean 0.27. The signal is a coherent late-layer band (L27-48 means: NC 0.549, LR 0.539), not a one-layer blip. Turn 1 is moderate, turns 2-3 are weak, so the pattern is not monotone but turn 4 is clearly the best self-chosen probe position. Follow-up scale job submitted: `7232075` -> `runs/diag/selfchosen_ready_20bank_12b_turn4scale_20260421/`. See `docs/progress/M3-12b-selfchosen-turns.md`.)
+**Current milestone:** M3 — TSUBAME + Gemma 3 12B, turn-4 pre-answer locked as self-chosen probe position; next bottleneck is class diversity.
+**Last agent:** Claude
+**Last updated:** 2026-04-21 (Scale-up `7232075` finished — 600 attempts, 80 kept runs (20/class) on `{elephant,cow,dog,horse}`. Ran `decode_turns.py` locally on turns 1 + 4. Turn-4 signal crystallizes sharply with 2x the data: LR LOO **0.787 @ L31** / NC 0.662 @ L29 (chance 0.25), with a broad coherent L27-48 band — LR mean **0.731**, NC mean **0.558**. Compared to n=40 pilot: LR jumps +0.19 in both mean and max; NC barely moves. That pattern says the class signal is linearly separable and was only LR-regularization-starved at n=40. Turn-1 L27-48 LR mean 0.431 is still above chance but far below turn-4, so the commitment-strengthening story is real. Public-history leakage ruled out (4-question panel is degenerate on this subset). STATUS threshold "~70% regime to lock this position" is cleared. See `docs/progress/M3-12b-selfchosen-turn4scale.md`.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -15,7 +15,8 @@ Do not headline calibration-only results.
 ## Next concrete step
 
 Prior notes, newest first:
-**`docs/progress/M3-12b-selfchosen-turns.md`** (turn-1..4 sweep on job `7230807` kept runs),
+**`docs/progress/M3-12b-selfchosen-turn4scale.md`** (n=80 scale-up on job `7232075`; turn-4 locked),
+`docs/progress/M3-12b-selfchosen-turns.md` (turn-1..4 sweep on job `7230807` kept runs),
 `docs/progress/M3-12b-selfchosen-direct.md` (job `7230807`; Ready direct-fit LOO local),
 `docs/progress/M3-12b-selfchosen-transfer.md` (job `7230657`; plus retrospective 20-bank slice),
 `docs/progress/M3-12b-pilot-readouts.md` (job `7226576`; readouts local),
@@ -77,10 +78,20 @@ Prior notes, newest first:
     On the realized kept subset `{elephant,cow,dog,horse}`, the 4-question
     panel is degenerate (`1,0,0,1` for every class). So the turn-4 decode
     cannot be coming from publicly distinguishing yes/no history.
+12. **Scale-up (n=80, 20/class) crystallizes the turn-4 signal decisively.**
+    Job `7232075`, same 20-bank prompt, same 4-question panel. On turn 4:
+    LR LOO **0.787 @ L31** / NC **0.662 @ L29** (chance 0.25). Broad
+    coherent L27-48 band: **LR mean 0.731**, NC mean 0.558. Compared to
+    the n=40 pilot, LR jumps +0.19 in both mean and max while NC barely
+    moves — consistent with linearly separable geometry that was only
+    regularization-starved at n=40. Turn 1 L27-48 LR mean 0.431 remains
+    above chance but well below turn 4. The STATUS ~70% threshold for
+    locking this probe position is cleared.
 
-Bottom line: at **12B**, `name_paraphrase` calibration is good infra, and
-Ready-state self-chosen readouts are weak, but **turn-4 pre-answer** carries a
-real self-chosen class code. The main path should move to that position.
+Bottom line: at **12B**, the self-chosen class code is decodable at
+**turn-4 pre-answer, late layers (L26-L48, peaks near L29-L31)**. LR
+0.79 at L31 is ~3.2x chance and the signal is coherent across depth. That
+position is locked for M4.
 
 **Pilot done (2026-04-21):** 100-run 12B `name_paraphrase` calibration on
 `{elephant,cow,dog,horse}` with the six-question panel (job `7226576`). Local
@@ -95,26 +106,38 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step:** use the running scale-up collection at the winning
-self-chosen position: turn-4 pre-answer, late layers (`~L42–L48`).
+**Next concrete step:** probe-position question is resolved. The next
+scientific bottleneck is **realized-class diversity**. Every 12B self-chosen
+collection so far (4-way narrowed, 20-bank pilot, 20-bank direct-fit,
+20-bank scale-up) realizes exactly `{elephant, cow, dog, horse}` under
+greedy decoding. LR 0.79 at 4 classes is nice but the scientific claim
+needs a wider class set to be interesting.
 
-1. Wait for / pull `runs/diag/selfchosen_ready_20bank_12b_turn4scale_20260421/`
-   from job `7232075`. Keep the analysis focus on turn 4, not Ready.
-2. Score the new runs primarily at **turn 4** using
-   `scripts/decode_turns.py`, and only secondarily compare against Ready as a
-   negative control.
-3. Check whether the current turn-4 band (`L42–L48`) stabilizes or improves
-   with more data. If it rises into the ~70% regime, lock this as the M4
-   probe position.
-4. If turn-4 accuracy plateaus well below that even with more runs, the next
-   bottleneck is realized-class diversity, not position. Only then move to
-   temperature / prompt-variant sweeps.
+1. Submit a TSUBAME job that reruns `diagnose_selfchosen_ready.py` on the
+   20-bank prompt at **T=0.7** (reuse the 4B T=0.7 path from
+   `M3-selfchosen-ready-T07.md`), with `--n-per-candidate 20` and enough
+   attempts (>=2000) to realize more of the bank. Stay on
+   `google/gemma-3-12b-it`, bfloat16, same 4-question panel (panel is
+   irrelevant at Ready / turn positions).
+2. Pull the kept subset and rerun `scripts/decode_turns.py` at turn 4,
+   layers `27-48` (the band that crystallized at n=80). The metric is
+   whether turn-4 LR LOO stays near 0.70-0.80 *as the realized class
+   count grows*. At 4 classes chance is 0.25; at 8 classes chance is
+   0.125, and the question is whether the signal degrades gracefully.
+3. If turn-4 LR LOO is still >=~2x chance at 8+ classes, that is the
+   headline self-chosen result. Write `docs/progress/M3-12b-selfchosen-
+   diversity.md`, add D-32, and mark M3 essentially complete.
+4. If temperature blows up instruction-following (parse-success < ~90%),
+   fall back to greedy + prompt variants — re-order the candidate list or
+   swap the opening sentence to break the elephant/cow/dog/horse
+   attractor. This is a last resort; try T>0 first.
 
 **Do not:**
 - repeat 4-way narrowed self-chosen prompts (collapse is established)
 - probe "State A/B" in the self-chosen condition — the concept does not
   apply there
 - spend more cycles on Ready-state self-chosen decoding as the main branch
+- sweep more positions on the 80-run dataset — turn-4 L26-48 is locked
 
 **Open threads on the backlog:**
 - **Bigger-model ladder (D-05):** 4B's salmon attractor may be model-specific.
