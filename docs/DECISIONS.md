@@ -513,3 +513,38 @@ Decision:
    a separate blocker from the probe-position question, but testing
    mid-dialogue on those four will still answer whether the self-chosen
    class code is decodable *anywhere* pre-reveal.
+
+## 2026-04-21 — D-30: At 12B, the right self-chosen probe position is turn-4 pre-answer, not Ready
+
+The D-29 follow-up has now run on the existing 40 kept self-chosen runs from
+job `7230807` (10 x `{elephant,cow,dog,horse}`), using the already-captured
+`turn_01..turn_04_activations.pt`.
+
+Result (see `docs/progress/M3-12b-selfchosen-turns.md`):
+
+- **Turn 4** is materially stronger than Ready:
+  - Ready: NC mean **0.23**, LR mean **0.27**, best **0.45**
+  - Turn 4 pre-answer: NC mean **0.40**, LR mean **0.40**,
+    best NC **0.625 @ L44**, best LR **0.60 @ L42**
+- The turn-4 signal is a coherent **late-layer band**, not a one-layer fluke:
+  - NC mean over L27..48 = **0.549**
+  - LR mean over L27..48 = **0.539**
+- The pattern is **not monotone** across turns:
+  - turn 1 is moderately decodable
+  - turns 2 and 3 are weak
+  - turn 4 becomes clearly strongest
+
+Crucial control: on the realized kept subset `{elephant,cow,dog,horse}`, the
+current 4-question panel is degenerate (`1,0,0,1` for every class). So the
+turn-4 decode cannot be explained by public answer history; it reflects a
+latent class code that sharpens under repeated commitment.
+
+Decision:
+
+1. **Move the main 12B self-chosen probe position from Ready to turn-4
+   pre-answer.**
+2. **Stop doing new Ready-state self-chosen analysis as the main branch.**
+   Ready is now a solved negative control.
+3. **Scale data at the winning position next.** The next productive artifact is
+   a larger 12B self-chosen 20-bank collection, analyzed primarily at late
+   turn-4 layers (`~L42–L48`).

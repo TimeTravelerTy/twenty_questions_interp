@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M3 — TSUBAME + Gemma 3 12B, self-chosen Ready direct-fit is also weak; sweep mid-dialogue pre-answer positions next.
-**Last agent:** Claude
-**Last updated:** 2026-04-21 (12B self-chosen Ready direct-fit finished, job `7230807`. 300 attempts, 40 kept runs balanced 10/class on `{elephant,cow,dog,horse}`. LOO at Ready: NC mean 0.23 / max 0.45 at L14, LR mean 0.27 / max 0.45 at L4 (chance 0.25). Calibration on the same 4-way subset saturates at 1.00 by L6/L27. Direct-fit is barely above chance. Original plan to probe State A/B was wrong — State A/B only exist when the model names the secret in context (persistence/calibration), which self-chosen forbids by construction. Revised next step: decode mid-dialogue pre-answer positions (`turn_01..turn_04_activations.pt` already captured) on the same kept subset, to test whether commitment sharpens once the model has answered a few yes/no questions. See `docs/progress/M3-12b-selfchosen-direct.md`.)
+**Current milestone:** M3 — TSUBAME + Gemma 3 12B, turn-4 pre-answer beats Ready; scale that position next.
+**Last agent:** Codex
+**Last updated:** 2026-04-21 (Ran the planned mid-dialogue sweep on the kept 40 self-chosen runs from job `7230807`. Turn 4 pre-answer is materially stronger than Ready: NC mean 0.40 / max 0.625 @ L44, LR mean 0.40 / max 0.60 @ L42, versus Ready NC mean 0.23 / LR mean 0.27. The signal is a coherent late-layer band (L27-48 means: NC 0.549, LR 0.539), not a one-layer blip. Turn 1 is moderate, turns 2-3 are weak, so the pattern is not monotone but turn 4 is clearly the best self-chosen probe position. Follow-up scale job submitted: `7232075` -> `runs/diag/selfchosen_ready_20bank_12b_turn4scale_20260421/`. See `docs/progress/M3-12b-selfchosen-turns.md`.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -15,7 +15,8 @@ Do not headline calibration-only results.
 ## Next concrete step
 
 Prior notes, newest first:
-**`docs/progress/M3-12b-selfchosen-direct.md`** (job `7230807`; direct-fit LOO local),
+**`docs/progress/M3-12b-selfchosen-turns.md`** (turn-1..4 sweep on job `7230807` kept runs),
+`docs/progress/M3-12b-selfchosen-direct.md` (job `7230807`; Ready direct-fit LOO local),
 `docs/progress/M3-12b-selfchosen-transfer.md` (job `7230657`; plus retrospective 20-bank slice),
 `docs/progress/M3-12b-pilot-readouts.md` (job `7226576`; readouts local),
 `docs/progress/M3-selfchosen-20bank.md` (jobs `7223018`, `7226501`, `7226502`, `7226538`, `7226546`, `7226547`),
@@ -26,7 +27,7 @@ Prior notes, newest first:
 `docs/progress/M3-3cond-binding-smoke.md` (job `7218265`),
 `docs/progress/M3-4cond-binding-smoke.md`, `docs/progress/M3-4b-smoke-diagnostics.md`.
 
-**Result so far (12B calibration is good; transfer still fails):**
+**Result so far (12B calibration is good; turn-4 self-chosen is the first useful probe position):**
 
 1. **20-bank prompt beats the 4-candidate panel.** Greedy 4B no longer
    collapses to only salmon/frog. Over 200 attempts: dolphin 104 / penguin 85 /
@@ -65,11 +66,21 @@ Prior notes, newest first:
    same 4 classes saturates at 1.00 from L6 (LR) / L27 (NC). So at 12B,
    Ready-state self-chosen geometry itself is the bottleneck, **not**
    calibration->self-chosen transfer.
+10. **Turn-4 pre-answer is materially stronger than Ready.** On the same 40
+    kept self-chosen runs, turn 4 pre-answer reaches NC mean **0.40** /
+    max **0.625 @ L44** and LR mean **0.40** / max **0.60 @ L42**. The
+    signal forms a broad late-layer band (L27-48 means: NC **0.549**,
+    LR **0.539**). Turn 1 is moderate, turns 2-3 are weak. So the right
+    lesson is not "later is always better"; it is that **turn 4 pre-answer**
+    is the first clearly probe-usable self-chosen position we have found.
+11. **This turn-4 signal is a latent-state result, not public-history leakage.**
+    On the realized kept subset `{elephant,cow,dog,horse}`, the 4-question
+    panel is degenerate (`1,0,0,1` for every class). So the turn-4 decode
+    cannot be coming from publicly distinguishing yes/no history.
 
-Bottom line: at **12B**, `name_paraphrase` calibration is good infra, but
-Ready-state self-chosen readouts are not probe-ready either by transfer or
-by direct fit. The probe *position* — Ready, versus State A / State B —
-is now the leading hypothesis, reinforcing D-21.
+Bottom line: at **12B**, `name_paraphrase` calibration is good infra, and
+Ready-state self-chosen readouts are weak, but **turn-4 pre-answer** carries a
+real self-chosen class code. The main path should move to that position.
 
 **Pilot done (2026-04-21):** 100-run 12B `name_paraphrase` calibration on
 `{elephant,cow,dog,horse}` with the six-question panel (job `7226576`). Local
@@ -84,49 +95,26 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step:** sweep **mid-dialogue pre-answer positions** on the
-existing 40-run direct-fit dataset. Ready is too early — the model has
-emitted only the word "Ready" and hasn't yet had its commitment tested.
-After a few yes/no answers, the chosen class may be more crystallized in
-the residual stream. This is the cheapest informative experiment: the data
-is already local (`attempt_XXX/turn_01..turn_04_activations.pt`).
+**Next concrete step:** use the running scale-up collection at the winning
+self-chosen position: turn-4 pre-answer, late layers (`~L42–L48`).
 
-**Correction to the previous revision of this step:** I originally wrote
-"replicate D-21 by probing State A / State B at 12B self-chosen". That was
-wrong. State A / State B are *persistence-regime* positions — they only
-exist when the model puts the secret name into context (calibration or
-post-reveal). Self-chosen by construction never verbalizes the secret, so
-there is no in-context State A/B to decode. Any "State B at self-chosen"
-really means "some residual-stream position at which the secret has
-already been put in context", which defeats the secrecy condition.
-
-1. Extend `scripts/decode_ready.py` (or add a sibling `decode_turns.py`)
-   to load `turn_0k_activations.pt` at the pre-answer position for turns
-   1..4 on the kept 40 self-chosen runs, and run the same LOO NC + LR
-   sweep across all 49 layers. Scoring uses the reveal label (since this
-   is still the self-chosen condition).
-2. Compare against Ready-position baseline from
-   `docs/progress/M3-12b-selfchosen-direct.md`. Look for:
-   - turn-wise sharpening (does accuracy rise monotonically with turn
-     number, i.e. more commitment -> more signal?)
-   - a layer band that is consistent across turns (real signal) vs.
-     noisy single-layer peaks (the Ready pattern)
-3. If mid-dialogue positions are strong (say, >=70% LOO at some layer +
-   turn), self-chosen probing moves from Ready to a mid-dialogue position.
-   Write `docs/progress/M3-12b-selfchosen-turns.md` and add D-30.
-4. If mid-dialogue is *also* weak, the bottleneck is sample size / class
-   diversity, not position. Next in that branch:
-   - narrow class set `{elephant,cow,dog,horse}` is the most likely
-     culprit (all mammals, mostly domesticated)
-   - forced diversity (T>0, multi-seed prompt variants) comes before
-     revisiting positions
+1. Wait for / pull `runs/diag/selfchosen_ready_20bank_12b_turn4scale_20260421/`
+   from job `7232075`. Keep the analysis focus on turn 4, not Ready.
+2. Score the new runs primarily at **turn 4** using
+   `scripts/decode_turns.py`, and only secondarily compare against Ready as a
+   negative control.
+3. Check whether the current turn-4 band (`L42–L48`) stabilizes or improves
+   with more data. If it rises into the ~70% regime, lock this as the M4
+   probe position.
+4. If turn-4 accuracy plateaus well below that even with more runs, the next
+   bottleneck is realized-class diversity, not position. Only then move to
+   temperature / prompt-variant sweeps.
 
 **Do not:**
 - repeat 4-way narrowed self-chosen prompts (collapse is established)
 - probe "State A/B" in the self-chosen condition — the concept does not
   apply there
-- keep adding Ready-state self-chosen runs until mid-dialogue positions
-  have been checked on the existing data
+- spend more cycles on Ready-state self-chosen decoding as the main branch
 
 **Open threads on the backlog:**
 - **Bigger-model ladder (D-05):** 4B's salmon attractor may be model-specific.
