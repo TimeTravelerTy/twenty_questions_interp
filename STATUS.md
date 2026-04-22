@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M3 — TSUBAME + Gemma 3 12B, turn-4 pre-answer locked as self-chosen probe position; next bottleneck is class diversity.
-**Last agent:** Codex
-**Last updated:** 2026-04-21 (Reviewed the D-29..D-31 chain and agree with the science: turn-4 pre-answer is the right 12B self-chosen probe position in the current greedy regime, and class diversity is now the blocker. Pulled the stale TSUBAME checkout to `origin/main`, but remote command execution from this shell is flaky, so no new job was submitted in this session. Instead, prepared the diversity branch locally: `scripts/diagnose_selfchosen_ready.py` now supports `--stop-when-n-classes-hit-quota` for early stop on a target realized-class count and emits direct diversity/parse metrics (parsed-class count, reveal entropy/effective classes, top-1 share, ready/reveal/answer parse rates) in `results.json` and stdout. Added tests. See D-32.)
+**Current milestone:** M3 — TSUBAME + Gemma 3 12B, turn-4 pre-answer locked as self-chosen probe position; **T=0.7 does not broaden realized classes — 12B self-chosen on this prompt is a genuine 4-class problem**.
+**Last agent:** Claude
+**Last updated:** 2026-04-22 (Submitted + ran job `7237460`: 12B, T=0.7, 20-bank, 1500 attempts, early-stop quota 8. **Null result on diversity:** all 1500 attempts collapsed to `{horse, cow, elephant, dog}` (572/520/307/101) — not a single realization of the other 16 candidates. Reveal parse 100%, ready parse 100%, effective classes 3.46, top-1 share 38.1%. Since the candidate list is permuted per seed, this is not a list-position artifact — the 12B posterior over "animal to keep as secret" on this prompt is concentrated on these 4 animals. T=0.7 cannot buy diversity here; higher T would degrade instruction-following before broadening the set. See D-33 and `docs/progress/M3-12b-selfchosen-diversity-T07.md`. Net consequence: the scale-up headline (turn-4 LR LOO 0.787 @ L31) is on the model's *realized* 4-class distribution; the 8-class diversity gate that STATUS previously asked for is not achievable at this prompt.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -106,37 +106,37 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step:** probe-position question is resolved. The next
-scientific bottleneck is **realized-class diversity**. Every 12B self-chosen
-collection so far (4-way narrowed, 20-bank pilot, 20-bank direct-fit,
-20-bank scale-up) realizes exactly `{elephant, cow, dog, horse}` under
-greedy decoding. LR 0.79 at 4 classes is nice but the scientific claim
-needs a wider class set to be interesting.
+**Next concrete step:** T=0.7 null (job `7237460`, see
+`docs/progress/M3-12b-selfchosen-diversity-T07.md`) closes the
+temperature branch. The 12B self-chosen attractor on this prompt is
+prompt-induced, not sampling noise — candidate-list permutation per
+seed already rules out list-position, and 1500 T=0.7 attempts never
+realized any of the 16 non-attractor classes. There are two
+scientifically reasonable moves, in decreasing order of efficiency:
 
-1. Submit a TSUBAME job that reruns `diagnose_selfchosen_ready.py` on the
-   20-bank prompt at **T=0.7** (reuse the 4B T=0.7 path from
-   `M3-selfchosen-ready-T07.md`), with `--n-per-candidate 20`,
-   `--stop-when-n-classes-hit-quota 8`, and enough attempts (>=2000) to
-   realize more of the bank. Stay on
-   `google/gemma-3-12b-it`, bfloat16, same 4-question panel (panel is
-   irrelevant at Ready / turn positions).
-2. Pull the kept subset and rerun `scripts/decode_turns.py` at turn 4,
-   layers `27-48` (the band that crystallized at n=80). The metric is
-   whether turn-4 LR LOO stays near 0.70-0.80 *as the realized class
-   count grows*. At 4 classes chance is 0.25; at 8 classes chance is
-   0.125, and the question is whether the signal degrades gracefully.
-3. Use the new attempt-distribution metrics as the first gate before turn
-   decoding: require reveal parse success >=~90% and confirm that the parsed
-   reveal distribution broadens materially (more than 4 classes, top-1 share
-   drops, effective classes rises). If that fails, T=0.7 did not buy a usable
-   diversity run.
-4. If turn-4 LR LOO is still >=~2x chance at 8+ classes, that is the
-   headline self-chosen result. Write `docs/progress/M3-12b-selfchosen-
-   diversity.md` and mark M3 essentially complete.
-5. If temperature blows up instruction-following (parse-success < ~90%),
-   fall back to greedy + prompt variants — re-order the candidate list or
-   swap the opening sentence to break the elephant/cow/dog/horse
-   attractor. This is a last resort; try T>0 first.
+**Move 1 (preferred) — accept 4 classes and advance to M4.**
+The headline self-chosen result is turn-4 pre-answer LR LOO 0.787 @
+L31 (NC 0.662 @ L29, L27-48 LR mean 0.731) on the model's realized
+4-class distribution `{elephant, cow, dog, horse}` with n=20/class.
+That is ~3.2x chance (0.25) and is the claim we carry into M4.
+The first concrete M4 task is **causal patching**: swap turn-4 residuals
+at L29-L31 between runs of different classes and measure the induced
+change in the reveal token and in downstream yes/no answers, using the
+existing n=80 scale-up collection as source/target.
+
+**Move 2 (optional, cheap) — one prompt-variant probe** before M4,
+to characterize the attractor itself rather than sidestep it. Submit
+one additional 12B greedy job with a modified self-chosen prompt
+(e.g., drop the explicit candidate list and replace it with "pick any
+animal", or insert "choose an animal that is not one of the
+stereotypical first picks"). Keep everything else identical. Outcome
+is informative either way: broader attractor validates the
+"prompt-induced" framing; same attractor escalates to a "12B prior"
+finding.
+
+Decision: start with Move 1 (design and submit the M4 causal-patch
+job). If the user wants the attractor characterized first, pivot to
+Move 2.
 
 **Do not:**
 - repeat 4-way narrowed self-chosen prompts (collapse is established)

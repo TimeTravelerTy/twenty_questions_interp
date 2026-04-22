@@ -607,3 +607,47 @@ Decision:
 3. Treat those diagnostics as the gate for the T=0.7 branch before decoding
    turn 4: if diversity broadens but parse success collapses, that is a prompt
    / instruction-following failure, not evidence about latent-state geometry.
+
+## 2026-04-22 — D-33: T=0.7 does not broaden 12B self-chosen — attractor is prompt-induced, not sampling noise; accept 4 classes as the M3 headline and move to M4
+
+Job `7237460` ran `diagnose_selfchosen_ready.py` at T=0.7 on the 20-bank
+prompt with 1500 attempts, 12B bf16, quota-8 early stop. Reveal and
+Ready parse success were 100%, but all 1500 reveals collapsed onto
+the same 4-class attractor as greedy:
+horse 572 / cow 520 / elephant 307 / dog 101, with zero realizations
+of the other 16 candidates (tiger, kangaroo, bat, dolphin, gorilla,
+cat, eagle, penguin, chicken, owl, cobra, crocodile, frog, shark,
+salmon, bee). Effective classes 3.46, top-1 share 38.1%. The
+candidate list is permuted per seed, so this is not a list-position
+artifact — it is a genuine concentration of the 12B posterior over
+"which animal to keep as secret" on this prompt.
+
+See `docs/progress/M3-12b-selfchosen-diversity-T07.md`.
+
+Decision:
+
+1. **Treat the 12B self-chosen problem on this prompt as a 4-class
+   problem.** The turn-4 LR LOO 0.787 @ L31 result on n=80 (chance
+   0.25, ~3.2x) is the M3 headline self-chosen result. It is on the
+   model's *realized* distribution, not on a cherry-picked subset; the
+   model itself does not realize more classes under this condition.
+2. **Stop sweeping temperature as a diversity lever.** T=0.7 is
+   already enough to reject the "sampling noise" explanation;
+   increasing T further would start degrading instruction-following
+   before it broadened the attractor, because the concentration is
+   not a sharpness issue.
+3. **Move to M4** (causal patching + SAE feature case studies at
+   turn-4 pre-answer L29-L31) using the existing n=80 scale-up
+   collection.
+4. **Optional side experiment, not a blocker for M4:** run exactly
+   one 12B greedy collection with a modified self-chosen prompt
+   (e.g., drop the candidate list, or insert "pick a less obvious
+   animal") to characterize whether the attractor is prompt-fragile
+   or a robust 12B prior. This is scientifically interesting on its
+   own and will inform the scale-up (Gemma 3 27B+) question of
+   whether the attractor shrinks, broadens, or shifts with scale.
+5. **Tag the attractor diversity as a scale-axis observable.** 4B
+   collapsed to `{salmon, frog, ...}`; 12B collapses to
+   `{horse, cow, elephant, dog}`. The identity and width of the
+   attractor are now themselves scientific observables to track at
+   27B+, not noise to suppress.
