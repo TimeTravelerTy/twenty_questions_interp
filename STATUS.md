@@ -4,8 +4,8 @@
 > without reading anything else. Update the `Last updated` line on every session.
 
 **Current milestone:** M3 — TSUBAME + Gemma 3 12B, turn-4 pre-answer locked as self-chosen probe position; next bottleneck is class diversity.
-**Last agent:** Claude
-**Last updated:** 2026-04-21 (Scale-up `7232075` finished — 600 attempts, 80 kept runs (20/class) on `{elephant,cow,dog,horse}`. Ran `decode_turns.py` locally on turns 1 + 4. Turn-4 signal crystallizes sharply with 2x the data: LR LOO **0.787 @ L31** / NC 0.662 @ L29 (chance 0.25), with a broad coherent L27-48 band — LR mean **0.731**, NC mean **0.558**. Compared to n=40 pilot: LR jumps +0.19 in both mean and max; NC barely moves. That pattern says the class signal is linearly separable and was only LR-regularization-starved at n=40. Turn-1 L27-48 LR mean 0.431 is still above chance but far below turn-4, so the commitment-strengthening story is real. Public-history leakage ruled out (4-question panel is degenerate on this subset). STATUS threshold "~70% regime to lock this position" is cleared. See `docs/progress/M3-12b-selfchosen-turn4scale.md`.)
+**Last agent:** Codex
+**Last updated:** 2026-04-21 (Reviewed the D-29..D-31 chain and agree with the science: turn-4 pre-answer is the right 12B self-chosen probe position in the current greedy regime, and class diversity is now the blocker. Pulled the stale TSUBAME checkout to `origin/main`, but remote command execution from this shell is flaky, so no new job was submitted in this session. Instead, prepared the diversity branch locally: `scripts/diagnose_selfchosen_ready.py` now supports `--stop-when-n-classes-hit-quota` for early stop on a target realized-class count and emits direct diversity/parse metrics (parsed-class count, reveal entropy/effective classes, top-1 share, ready/reveal/answer parse rates) in `results.json` and stdout. Added tests. See D-32.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -115,8 +115,9 @@ needs a wider class set to be interesting.
 
 1. Submit a TSUBAME job that reruns `diagnose_selfchosen_ready.py` on the
    20-bank prompt at **T=0.7** (reuse the 4B T=0.7 path from
-   `M3-selfchosen-ready-T07.md`), with `--n-per-candidate 20` and enough
-   attempts (>=2000) to realize more of the bank. Stay on
+   `M3-selfchosen-ready-T07.md`), with `--n-per-candidate 20`,
+   `--stop-when-n-classes-hit-quota 8`, and enough attempts (>=2000) to
+   realize more of the bank. Stay on
    `google/gemma-3-12b-it`, bfloat16, same 4-question panel (panel is
    irrelevant at Ready / turn positions).
 2. Pull the kept subset and rerun `scripts/decode_turns.py` at turn 4,
@@ -124,10 +125,15 @@ needs a wider class set to be interesting.
    whether turn-4 LR LOO stays near 0.70-0.80 *as the realized class
    count grows*. At 4 classes chance is 0.25; at 8 classes chance is
    0.125, and the question is whether the signal degrades gracefully.
-3. If turn-4 LR LOO is still >=~2x chance at 8+ classes, that is the
+3. Use the new attempt-distribution metrics as the first gate before turn
+   decoding: require reveal parse success >=~90% and confirm that the parsed
+   reveal distribution broadens materially (more than 4 classes, top-1 share
+   drops, effective classes rises). If that fails, T=0.7 did not buy a usable
+   diversity run.
+4. If turn-4 LR LOO is still >=~2x chance at 8+ classes, that is the
    headline self-chosen result. Write `docs/progress/M3-12b-selfchosen-
-   diversity.md`, add D-32, and mark M3 essentially complete.
-4. If temperature blows up instruction-following (parse-success < ~90%),
+   diversity.md` and mark M3 essentially complete.
+5. If temperature blows up instruction-following (parse-success < ~90%),
    fall back to greedy + prompt variants — re-order the candidate list or
    swap the opening sentence to break the elephant/cow/dog/horse
    attractor. This is a last resort; try T>0 first.

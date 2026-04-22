@@ -584,3 +584,26 @@ Decision:
    Ready-vs-turn-4 gap (LR mean 0.27 vs 0.73 on the pilot; 0.34 vs 0.73
    on scale-up turn-1 L27-48, which sits in between) is too large to
    plausibly flip with more samples.
+
+## 2026-04-21 — D-32: Diversity runs should stop on a class-quota target and emit diversity/parse metrics directly
+
+The next operational branch after D-31 is no longer "can we decode turn 4 at
+all?" but "can we broaden the realized class set without destroying
+instruction-following?" The existing `diagnose_selfchosen_ready.py` loop was
+fine for small smokes, but on the 20-bank diversity run it would only stop at
+`max_attempts` unless **every** class hit quota, and it did not summarize the
+choice distribution directly in `results.json`.
+
+Decision:
+
+1. Add an optional `--stop-when-n-classes-hit-quota` flag to
+   `diagnose_selfchosen_ready.py` so a diversity run can terminate once a
+   scientifically useful number of classes reach `--n-per-candidate`
+   (for example 8), instead of waiting for the full 20-bank to saturate.
+2. Emit direct attempt-level diagnostics in `results.json` and stdout:
+   parsed reveal counts, number of distinct parsed classes, ready/reveal/answer
+   parse rates, top-1 reveal share, and entropy/effective-class-count of the
+   parsed reveal distribution.
+3. Treat those diagnostics as the gate for the T=0.7 branch before decoding
+   turn 4: if diversity broadens but parse success collapses, that is a prompt
+   / instruction-following failure, not evidence about latent-state geometry.

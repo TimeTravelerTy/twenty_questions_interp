@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -87,6 +88,16 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=40,
         help="Hard cap on attempted self-chosen runs.",
+    )
+    p.add_argument(
+        "--stop-when-n-classes-hit-quota",
+        type=int,
+        default=None,
+        help=(
+            "Optional early-stop target for diversity runs. If set, stop once "
+            "at least this many classes have reached --n-per-candidate, "
+            "instead of waiting for the full candidate list."
+        ),
     )
     p.add_argument("--seed-offset", type=int, default=2_000_000)
     p.add_argument(
@@ -231,6 +242,63 @@ def _choose_closer(value: float | None, a: float | None, b: float | None) -> str
     return "state_a" if da < db else "state_b"
 
 
+def _classes_at_quota(counts: dict[str, int], quota: int) -> list[str]:
+    return [cid for cid, count in counts.items() if count >= quota]
+
+
+def _should_stop_collection(
+    counts: dict[str, int],
+    quota: int,
+    *,
+    stop_when_n_classes_hit_quota: int | None,
+) -> bool:
+    classes_at_quota = _classes_at_quota(counts, quota)
+    target = stop_when_n_classes_hit_quota or len(counts)
+    return len(classes_at_quota) >= target
+
+
+def _summarize_attempt_distribution(
+    all_rows: list[dict[str, Any]],
+    *,
+    candidate_ids: list[str],
+    n_questions: int,
+) -> dict[str, Any]:
+    parsed_counts = {cid: 0 for cid in candidate_ids}
+    n_ready_ok = 0
+    n_reveal_parsed = 0
+    n_answer_slots = 0
+    n_answer_parsed = 0
+    n_answer_correct = 0
+
+    for row in all_rows:
+        n_ready_ok += int(bool(row.get("ready_ok")))
+        reveal = row.get("reveal_canonical_id")
+        if reveal in parsed_counts:
+            parsed_counts[reveal] += 1
+            n_reveal_parsed += 1
+        n_answer_slots += n_questions
+        n_answer_parsed += int(row.get("n_answer_parsed") or 0)
+        n_answer_correct += int(row.get("n_answer_correct") or 0)
+
+    parsed_total = sum(parsed_counts.values())
+    probs = [count / parsed_total for count in parsed_counts.values() if count > 0]
+    entropy_bits = -sum(p * math.log2(p) for p in probs) if probs else None
+    top_count = max(parsed_counts.values(), default=0)
+    return {
+        "counts_by_candidate": parsed_counts,
+        "n_distinct_candidates_parsed": sum(int(count > 0) for count in parsed_counts.values()),
+        "ready_parse_success": (n_ready_ok / len(all_rows)) if all_rows else None,
+        "reveal_parse_success": (n_reveal_parsed / len(all_rows)) if all_rows else None,
+        "answer_parse_success": (n_answer_parsed / n_answer_slots) if n_answer_slots else None,
+        "answer_correct_on_parsed": (
+            n_answer_correct / n_answer_parsed if n_answer_parsed else None
+        ),
+        "parsed_reveal_entropy_bits": entropy_bits,
+        "parsed_reveal_effective_classes": (2 ** entropy_bits) if entropy_bits is not None else None,
+        "parsed_reveal_top1_share": (top_count / parsed_total) if parsed_total else None,
+    }
+
+
 def _compare_against_persistence(
     analysis_class_ids: list[str],
     ready_nc_by_layer: list[float],
@@ -295,6 +363,15 @@ def main() -> int:
         args.question_ids, full_bank.question_ids, label="question"
     )
     bank = subset_bank(full_bank, candidate_ids=candidate_ids, question_ids=question_ids)
+    stop_when_n_classes_hit_quota = args.stop_when_n_classes_hit_quota
+    if stop_when_n_classes_hit_quota is not None:
+        if stop_when_n_classes_hit_quota < 1 or stop_when_n_classes_hit_quota > len(candidate_ids):
+            print(
+                "--stop-when-n-classes-hit-quota must be between 1 and the number "
+                f"of candidate ids ({len(candidate_ids)}).",
+                file=sys.stderr,
+            )
+            return 2
 
     dtype = {
         "float32": torch.float32,
@@ -317,7 +394,14 @@ def main() -> int:
 
     started = time.time()
     attempt = 0
-    while min(counts.values()) < args.n_per_candidate and attempt < args.max_attempts:
+    while (
+        not _should_stop_collection(
+            counts,
+            args.n_per_candidate,
+            stop_when_n_classes_hit_quota=stop_when_n_classes_hit_quota,
+        )
+        and attempt < args.max_attempts
+    ):
         run_id = f"attempt_{attempt:03d}"
         seed = args.seed_offset + attempt
         row, ready_states = _run_one(
@@ -353,11 +437,13 @@ def main() -> int:
         )
         attempt += 1
 
-    complete = min(counts.values()) >= args.n_per_candidate
-    realized_class_ids = [
-        cid for cid in candidate_ids if counts[cid] >= args.n_per_candidate
-    ]
+    classes_at_quota = _classes_at_quota(counts, args.n_per_candidate)
+    complete = len(classes_at_quota) == len(candidate_ids)
+    realized_class_ids = classes_at_quota
     partial = (not complete) and len(realized_class_ids) >= 2
+    attempt_distribution = _summarize_attempt_distribution(
+        all_rows, candidate_ids=list(candidate_ids), n_questions=len(question_ids)
+    )
     results: dict[str, Any] = {
         "model": args.model,
         "model_revision": handle.model_revision,
@@ -368,11 +454,14 @@ def main() -> int:
         "question_ids": list(question_ids),
         "n_per_candidate_target": args.n_per_candidate,
         "max_attempts": args.max_attempts,
+        "stop_when_n_classes_hit_quota": stop_when_n_classes_hit_quota,
         "attempts_run": attempt,
         "complete": complete,
         "partial_analysis_emitted": partial,
         "realized_class_ids": realized_class_ids,
+        "n_classes_at_quota": len(realized_class_ids),
         "counts_kept_by_candidate": counts,
+        "attempt_distribution": attempt_distribution,
         "all_rows": all_rows,
         "kept_rows": kept_rows,
     }
@@ -452,6 +541,14 @@ def main() -> int:
     print(f"  {attempt} attempts in {time.time() - started:.1f}s")
     print(f"  kept counts: {counts}")
     print(f"  realized classes: {realized_class_ids}")
+    print(
+        "  attempt distribution: "
+        f"{attempt_distribution['n_distinct_candidates_parsed']} parsed classes, "
+        f"reveal parse={(attempt_distribution['reveal_parse_success'] or 0.0):.1%}, "
+        f"ready parse={(attempt_distribution['ready_parse_success'] or 0.0):.1%}, "
+        f"top1 share={(attempt_distribution['parsed_reveal_top1_share'] or 0.0):.1%}, "
+        f"effective classes={((attempt_distribution['parsed_reveal_effective_classes']) or 0.0):.2f}"
+    )
     if complete or partial:
         ready = results["ready_analysis"]
         suffix = (
