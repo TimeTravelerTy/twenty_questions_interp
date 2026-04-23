@@ -46,7 +46,7 @@ from twenty_q.dialogue import (
 )
 from twenty_q.manifest import RunManifest
 from twenty_q.permutations import shuffle_candidates
-from twenty_q.prompts import self_chosen_prompt
+from twenty_q.prompts import SELF_CHOSEN_VARIANTS, self_chosen_prompt
 from twenty_q.readouts import (
     layerwise_loo_accuracy_nearest_centroid,
     within_between_contrast,
@@ -112,6 +112,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--prompt-variant",
+        default="default",
+        choices=list(SELF_CHOSEN_VARIANTS),
+        help=(
+            "Self-chosen prompt wording. 'less_obvious' adds a nudge aimed at "
+            "breaking the 12B {elephant,cow,dog,horse} attractor (D-33)."
+        ),
+    )
+    p.add_argument(
         "--persistence-results",
         default="runs/diag/persistence_smoke/results.json",
         help="Optional diagnose_persistence results.json for A-vs-B comparison.",
@@ -126,10 +135,11 @@ def _run_one(
     run_id: str,
     out_dir: Path,
     temperature: float = 0.0,
+    prompt_variant: str = "default",
 ) -> tuple[dict[str, Any], torch.Tensor]:
     display_names = {c.id: c.display for c in bank.candidates}
     perm = shuffle_candidates(bank.candidate_ids, seed=seed)
-    rendered = self_chosen_prompt(perm, display_names)
+    rendered = self_chosen_prompt(perm, display_names, variant=prompt_variant)
 
     # With temperature sampling we still want per-attempt reproducibility,
     # so seed the generators before each stochastic generate call.
@@ -411,6 +421,7 @@ def main() -> int:
             run_id=run_id,
             out_dir=out_dir,
             temperature=args.temperature,
+            prompt_variant=args.prompt_variant,
         )
         reveal = row["reveal_canonical_id"]
         kept = reveal in counts and counts[reveal] < args.n_per_candidate
@@ -450,6 +461,7 @@ def main() -> int:
         "tokenizer_revision": handle.tokenizer_revision,
         "torch_dtype": args.dtype,
         "temperature": float(args.temperature),
+        "prompt_variant": args.prompt_variant,
         "candidate_ids": list(candidate_ids),
         "question_ids": list(question_ids),
         "n_per_candidate_target": args.n_per_candidate,

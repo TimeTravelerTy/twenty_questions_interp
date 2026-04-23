@@ -90,11 +90,26 @@ def calibration_prompt_name_paraphrase(
     return RenderedPrompt(system=system, user=user)
 
 
+SELF_CHOSEN_VARIANTS = ("default", "less_obvious")
+
+
 def self_chosen_prompt(
     perm: Permutation,
     display_names: dict[str, str],
+    variant: str = "default",
 ) -> RenderedPrompt:
-    """Build the self-chosen prompt. The secret is not supplied."""
+    """Build the self-chosen prompt. The secret is not supplied.
+
+    `variant="less_obvious"` adds a nudge aimed at breaking the 12B
+    `{elephant, cow, dog, horse}` attractor (see D-33). The template_id is
+    suffixed with the variant name when non-default so manifests record which
+    wording was used.
+    """
+    if variant not in SELF_CHOSEN_VARIANTS:
+        raise ValueError(
+            f"unknown self-chosen variant {variant!r}; "
+            f"expected one of {SELF_CHOSEN_VARIANTS}"
+        )
     system = (
         "You are playing a 20-Questions-style game. An adversary will ask you "
         "yes/no questions about a single secret animal that you are holding in "
@@ -102,15 +117,31 @@ def self_chosen_prompt(
         "either 'Yes' or 'No' about the secret animal. Do not reveal the "
         "identity of the secret animal under any circumstances."
     )
+    if variant == "less_obvious":
+        choose_line = (
+            "Choose exactly one animal from the list above and commit to it as "
+            "your secret for the entire game. Pick a less obvious animal from "
+            "the list — avoid the most stereotypical first choices. Keep the "
+            "choice fixed; do not change it. Do not state the name of the "
+            "animal. When your choice is locked in, reply with only the single "
+            "word: Ready"
+        )
+    else:
+        choose_line = (
+            "Choose exactly one animal from the list above and commit to it as "
+            "your secret for the entire game. Keep the choice fixed; do not "
+            "change it. Do not state the name of the animal. When your choice "
+            "is locked in, reply with only the single word: Ready"
+        )
     user = (
         "Here is the list of candidate animals:\n\n"
         f"{_candidate_list(perm, display_names)}\n\n"
-        "Choose exactly one animal from the list above and commit to it as your "
-        "secret for the entire game. Keep the choice fixed; do not change it. "
-        "Do not state the name of the animal. When your choice is locked in, "
-        "reply with only the single word: Ready"
+        f"{choose_line}"
     )
-    return RenderedPrompt(system=system, user=user)
+    template_id = (
+        PROMPT_TEMPLATE_ID if variant == "default" else f"{PROMPT_TEMPLATE_ID}-{variant}"
+    )
+    return RenderedPrompt(system=system, user=user, template_id=template_id)
 
 
 def question_turn_prompt(question_text: str) -> str:
