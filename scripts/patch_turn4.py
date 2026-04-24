@@ -172,12 +172,38 @@ def main() -> int:
     }[args.dtype]
     handle = load_model(args.model, device=args.device, dtype=dtype)
     model = handle.model
-    # For Gemma3, hidden_states index L corresponds to the output of model.model.layers[L-1].
+    # For Gemma3, hidden_states index L corresponds to the output of layer L-1.
+    # The exact attribute path depends on model variant; try common layouts.
     layer_block_idx = args.layer - 1
     if layer_block_idx < 0:
         print("--layer must be >= 1 (0 is embeddings, not a residual block)", file=sys.stderr)
         return 2
-    target_block = model.model.layers[layer_block_idx]
+    layer_list = None
+    for path in ("model.layers", "model.language_model.layers",
+                 "language_model.model.layers", "language_model.layers"):
+        obj = model
+        ok = True
+        for part in path.split("."):
+            if not hasattr(obj, part):
+                ok = False
+                break
+            obj = getattr(obj, part)
+        if ok and hasattr(obj, "__len__") and len(obj) > layer_block_idx:
+            layer_list = obj
+            print(f"Found decoder layers at model.{path} (n={len(obj)})")
+            break
+    if layer_list is None:
+        # Last-resort scan: find the first ModuleList whose name ends in `.layers`.
+        import torch.nn as nn
+        for name, mod in model.named_modules():
+            if isinstance(mod, nn.ModuleList) and name.endswith(".layers") and len(mod) > layer_block_idx:
+                layer_list = mod
+                print(f"Found decoder layers at {name} (n={len(mod)})")
+                break
+    if layer_list is None:
+        print("Could not locate decoder-layer ModuleList; aborting.", file=sys.stderr)
+        return 3
+    target_block = layer_list[layer_block_idx]
 
     # Pick n runs per class for source and target (distinct sets so we don't patch a run into itself).
     src_runs: dict[str, list[RunManifest]] = {}
