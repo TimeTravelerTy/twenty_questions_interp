@@ -170,7 +170,7 @@ def main() -> int:
         "bfloat16": torch.bfloat16,
         "float16": torch.float16,
     }[args.dtype]
-    handle = load_model(args.model, device=args.device, torch_dtype=dtype)
+    handle = load_model(args.model, device=args.device, dtype=dtype)
     model = handle.model
     # For Gemma3, hidden_states index L corresponds to the output of model.model.layers[L-1].
     layer_block_idx = args.layer - 1
