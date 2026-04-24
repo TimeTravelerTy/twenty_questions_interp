@@ -651,3 +651,57 @@ Decision:
    `{horse, cow, elephant, dog}`. The identity and width of the
    attractor are now themselves scientific observables to track at
    27B+, not noise to suppress.
+
+## 2026-04-24 — D-34: 12B self-chosen attractor is partly prompt-fragile; turn-4 LR LOO generalizes to new classes at ~2.7x chance
+
+Job `7246440` ran `diagnose_selfchosen_ready.py` with the new
+`--prompt-variant less_obvious` (adds the sentence "Pick a less
+obvious animal from the list — avoid the most stereotypical first
+choices.") on the 20-bank at T=0.0, 600 greedy attempts, 101 kept.
+Reveal parse 100%, Ready parse 100%.
+
+**Diversity result:** attractor partly moves. `dog` is fully
+displaced (0 reveals). `gorilla` (102) and `kangaroo` (21) hit quota
+from a prior baseline of zero. `penguin` appears once. `horse`, `cow`,
+`elephant` persist (38.5% / 33.0% / 7.8%). 6 parsed classes, effective
+classes 3.90 (vs 3.46 at T=0.7). 14/20 bank classes still never
+realized. So the attractor is partly prompt-fragile and partly a real
+12B prior.
+
+**Decoding result:** ran `decode_turns.py --selection kept --turns 1,4
+--layers all` on the 101 kept runs. Turn-4 LR LOO 0.54 @ L29
+(chance 0.20, ratio **2.7x**), L27-48 LR mean 0.51. NC turn-4
+0.48 @ L48, mean 0.42. Peak layer band stable at L29-L31.
+
+Critical generalization: gorilla and kangaroo were never in any
+prior 12B collection, yet the late-layer LR decodes them. The
+signal drops from ~3.2x chance at 4 classes to ~2.7x chance at 5
+classes but does not break. If the feature were tied to a
+"farm-animal / pet" subspace unique to `{elephant,cow,dog,horse}`,
+we would expect degradation on the exotic-animal mix; we see mild
+degradation, not collapse.
+
+Decision:
+
+1. **The M3 self-chosen decodability claim now spans two class
+   regimes.** Carry both numbers forward: 4-class default 3.2x
+   chance (LR 0.79 @ L31) and 5-class less_obvious 2.7x chance
+   (LR 0.54 @ L29). L29-L31 is the locked probe band across both.
+2. **Stop chasing diversity.** Neither temperature nor one round of
+   prompt rewording broke the residual 12B concentration, and the
+   generalization check is done. Further prompt tourism would not
+   add a scientific claim beyond what D-33 and D-34 already
+   establish.
+3. **M4 begins: causal patching at turn-4 L29.** Use the n=80
+   default collection as the base (balanced 4 classes). Patch L29
+   last-pre-answer residual from C_src runs into C_tgt runs, measure
+   reveal-token flip rate and turn-4 answer-flip rate, and produce a
+   4x4 source-x-target matrix. Single-layer, single-position first;
+   expand if noisy. Secondary: repeat on the less_obvious collection
+   for gorilla/kangaroo as a generalization check.
+4. **Scale-axis observable tagged:** the default attractor identity
+   and its prompt-fragility are concrete observables for the
+   Gemma 3 27B+ follow-up. A 27B that is either more attractor-
+   concentrated or more fragile would both be interesting; the
+   "early decision vs late crystallization" question becomes easier
+   to answer when class diversity is no longer a confound.

@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M3 — TSUBAME + Gemma 3 12B, turn-4 pre-answer locked as self-chosen probe position; **T=0.7 does not broaden realized classes — 12B self-chosen on this prompt is a genuine 4-class problem**.
+**Current milestone:** M3 — 12B self-chosen turn-4 pre-answer decodability confirmed across two class regimes (4-class default 3.2× chance, 5-class prompt variant 2.7× chance); next step is M4 causal patching at L29-L31.
 **Last agent:** Claude
-**Last updated:** 2026-04-22 (Submitted + ran job `7237460`: 12B, T=0.7, 20-bank, 1500 attempts, early-stop quota 8. **Null result on diversity:** all 1500 attempts collapsed to `{horse, cow, elephant, dog}` (572/520/307/101) — not a single realization of the other 16 candidates. Reveal parse 100%, ready parse 100%, effective classes 3.46, top-1 share 38.1%. Since the candidate list is permuted per seed, this is not a list-position artifact — the 12B posterior over "animal to keep as secret" on this prompt is concentrated on these 4 animals. T=0.7 cannot buy diversity here; higher T would degrade instruction-following before broadening the set. See D-33 and `docs/progress/M3-12b-selfchosen-diversity-T07.md`. Net consequence: the scale-up headline (turn-4 LR LOO 0.787 @ L31) is on the model's *realized* 4-class distribution; the 8-class diversity gate that STATUS previously asked for is not achievable at this prompt.)
+**Last updated:** 2026-04-24 (Prompt-variant probe, job `7246440`: added `less_obvious` nudge to `self_chosen_prompt` and ran 600 greedy attempts on 12B 20-bank. **Attractor partially moved**: dog displaced, gorilla (102) + kangaroo (21) promoted to quota, penguin appeared once — 6 parsed classes, effective 3.90, top-1 still 38.5% (horse). 14/20 bank classes still never realized. Ran `decode_turns.py` on the 101 kept runs: turn-4 LR LOO 0.54 @ L29 (chance 0.20, **2.7× chance**), L27-48 mean 0.51. Critically, gorilla+kangaroo were never in any prior 12B collection, yet the late-layer LR still decodes — so **turn-4 pre-answer generalizes to new classes**, which is the first real generalization check we have on the M3 probe. Peak layer stable at L29. See `docs/progress/M3-12b-selfchosen-lessobv.md`. D-34 to follow in commit.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -106,37 +106,49 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step:** T=0.7 null (job `7237460`, see
-`docs/progress/M3-12b-selfchosen-diversity-T07.md`) closes the
-temperature branch. The 12B self-chosen attractor on this prompt is
-prompt-induced, not sampling noise — candidate-list permutation per
-seed already rules out list-position, and 1500 T=0.7 attempts never
-realized any of the 16 non-attractor classes. There are two
-scientifically reasonable moves, in decreasing order of efficiency:
+**Next concrete step:** both diversity probes are done —
+temperature-null (D-33) closed the sampling branch, and the
+prompt-variant probe (D-34, `docs/progress/M3-12b-selfchosen-lessobv.md`)
+showed that the attractor is partly prompt-fragile and that the
+turn-4 LR LOO signal generalizes to new classes (gorilla, kangaroo)
+at 2.7× chance. The headline M3 self-chosen result now spans two
+realized-class regimes; further diversity probes would be attractor
+tourism.
 
-**Move 1 (preferred) — accept 4 classes and advance to M4.**
-The headline self-chosen result is turn-4 pre-answer LR LOO 0.787 @
-L31 (NC 0.662 @ L29, L27-48 LR mean 0.731) on the model's realized
-4-class distribution `{elephant, cow, dog, horse}` with n=20/class.
-That is ~3.2x chance (0.25) and is the claim we carry into M4.
-The first concrete M4 task is **causal patching**: swap turn-4 residuals
-at L29-L31 between runs of different classes and measure the induced
-change in the reveal token and in downstream yes/no answers, using the
-existing n=80 scale-up collection as source/target.
+**Pivot to M4 — causal patching at turn-4 L29-L31.** The first M4
+artifact is a patching experiment using the existing n=80 default
+scale-up collection as the base (balanced 4 classes, n=20 each):
 
-**Move 2 (optional, cheap) — one prompt-variant probe** before M4,
-to characterize the attractor itself rather than sidestep it. Submit
-one additional 12B greedy job with a modified self-chosen prompt
-(e.g., drop the explicit candidate list and replace it with "pick any
-animal", or insert "choose an animal that is not one of the
-stereotypical first picks"). Keep everything else identical. Outcome
-is informative either way: broader attractor validates the
-"prompt-induced" framing; same attractor escalates to a "12B prior"
-finding.
+1. For each pair of source class (C_src) and target class (C_tgt)
+   in `{elephant, cow, dog, horse}`:
+   - Pick a turn-4 pre-answer residual at L29 (or the L29-L31 band,
+     averaged) from a C_src run, and patch it into a C_tgt run at the
+     same position.
+   - Regenerate from the patched state through the rest of turn 4 and
+     the reveal turn.
+   - Score: (a) whether the reveal token flips toward C_src, and
+     (b) whether the yes/no answer on turn 4 flips to match C_src's
+     answer pattern (which is degenerate on `{elephant,cow,dog,horse}`
+     so this is only informative on questions where source/target
+     differ; panel expansion may be needed).
+2. The outcome is a 4x4 flip-rate matrix; a genuine causal locus
+   should make diagonal-vs-off-diagonal differ materially.
+3. Secondary: repeat the same patching experiment on the
+   `less_obvious` 5-class collection as a generalization check,
+   particularly for gorilla/kangaroo that are outside the default
+   attractor.
 
-Decision: start with Move 1 (design and submit the M4 causal-patch
-job). If the user wants the attractor characterized first, pivot to
-Move 2.
+Before writing the patching script, stage design questions:
+  - single-token residual patch vs full-range patch at turn-4
+    pre-answer?
+  - L29 only, L29-L31 averaged, or layer sweep?
+  - need the `less_obvious` attempts' activations remote-staged at
+    full size (currently we only have kept-subset), or is the default
+    n=80 enough for M4 phase 1?
+
+Default plan: start with L29 single-layer, single-position (last
+pre-answer token), default n=80 collection only. One-layer patch is
+the cleanest first experiment. Expand if the signal is noisy.
 
 **Do not:**
 - repeat 4-way narrowed self-chosen prompts (collapse is established)
