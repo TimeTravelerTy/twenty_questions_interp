@@ -123,11 +123,17 @@ def _context_with_turn4_and_reveal(
 
 
 def _make_patch_hook(position: int, src_residual: torch.Tensor):
-    """Forward hook: replace block output at position `position` (last dim is hidden)
-    with the source residual. src_residual shape: (hidden_size,).
+    """Forward hook: replace block output at `position` with the source residual.
+
+    Only patches during prefill (when `hs.shape[1]` covers the full context and
+    includes `position`). During autoregressive decode steps `seq_len == 1` and
+    we leave the output untouched — the KV cache from the patched prefill is
+    what propagates the intervention forward.
     """
     def hook(module, inputs, output):
         hs = output[0] if isinstance(output, tuple) else output
+        if hs.shape[1] <= position:
+            return output
         new_hs = hs.clone()
         new_hs[:, position, :] = src_residual.to(device=hs.device, dtype=hs.dtype)
         if isinstance(output, tuple):
