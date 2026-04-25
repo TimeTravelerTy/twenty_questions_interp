@@ -62,6 +62,10 @@ def parse_args() -> argparse.Namespace:
                    help="Comma-separated layer band, e.g. '27,28,...,48' or "
                         "'29,30,31'. Overrides --layer. All listed layers are "
                         "patched at the pre-answer position simultaneously.")
+    p.add_argument("--turn", type=int, default=4, choices=[1, 2, 3, 4],
+                   help="Which turn's pre-answer position to patch (1..4). "
+                        "Default 4. Loads the corresponding "
+                        "`turn_0N_activations.pt` from each src run.")
     p.add_argument("--n-source-per-class", type=int, default=5)
     p.add_argument("--n-target-per-class", type=int, default=5)
     p.add_argument("--prompt-variant", default="default")
@@ -106,19 +110,28 @@ def _build_chat_for_run(
     return _build_chat_input_ids(handle, rendered, extra_turns=extra_turns)
 
 
+def _context_up_to_qN_preanswer(
+    handle: ModelHandle, manifest: RunManifest, bank: Any, prompt_variant: str, n: int
+) -> dict[str, torch.Tensor]:
+    """Tokenize context ending at the turn-N pre-answer position (with
+    add_generation_prompt=True), so the last input token is the one at which
+    the model would next emit turn N's answer. n is 1-indexed, in [1, 4].
+    """
+    if n < 1 or n > 4:
+        raise ValueError(f"turn N must be 1..4, got {n}")
+    turns_so_far = list(manifest.turns[: n - 1])  # turns 1..N-1 with their answers
+    turnN_question = manifest.turns[n - 1]  # the user message for turn N
+    extra = _history_to_chat_turns(manifest.ready_raw_output, turns_so_far)
+    from twenty_q.prompts import question_turn_prompt  # local import to avoid circulars
+    extra.append({"role": "user", "content": question_turn_prompt(turnN_question.question_text)})
+    return _build_chat_for_run(handle, manifest, bank, prompt_variant, extra_turns=extra)
+
+
 def _context_up_to_q4_preanswer(
     handle: ModelHandle, manifest: RunManifest, bank: Any, prompt_variant: str
 ) -> dict[str, torch.Tensor]:
-    """Tokenize context ending at the turn-4 pre-answer position (with
-    add_generation_prompt=True), so the last input token is the one at which
-    the model would next emit turn 4's answer.
-    """
-    turns_so_far = list(manifest.turns[:3])  # turns 1..3 (answers)
-    turn4_question = manifest.turns[3]  # the user message for turn 4
-    extra = _history_to_chat_turns(manifest.ready_raw_output, turns_so_far)
-    from twenty_q.prompts import question_turn_prompt  # local import to avoid circulars
-    extra.append({"role": "user", "content": question_turn_prompt(turn4_question.question_text)})
-    return _build_chat_for_run(handle, manifest, bank, prompt_variant, extra_turns=extra)
+    """Backward-compat alias for _context_up_to_qN_preanswer(..., n=4)."""
+    return _context_up_to_qN_preanswer(handle, manifest, bank, prompt_variant, 4)
 
 
 def _context_with_turn4_and_reveal(
@@ -298,11 +311,11 @@ def main() -> int:
             })
     print(f"Baselines: {len(baseline_records)} runs in {time.time()-t0:.1f}s")
 
-    # ---- 2) Compute pre-answer position index for every tgt run. ----
+    # ---- 2) Compute pre-answer position index for every tgt run at the chosen turn. ----
     pos_index: dict[str, int] = {}
     for tgt_class, runs in tgt_runs.items():
         for tgt in runs:
-            inputs_pre = _context_up_to_q4_preanswer(handle, tgt, bank, args.prompt_variant)
+            inputs_pre = _context_up_to_qN_preanswer(handle, tgt, bank, args.prompt_variant, args.turn)
             pos_index[tgt.run_id] = int(inputs_pre["input_ids"].shape[1] - 1)
 
     # ---- 3) Patched trials. ----
@@ -312,9 +325,11 @@ def main() -> int:
         len(src_runs[sc]) * len(tgt_runs[tc]) for sc in realized for tc in realized
     )
     trial = 0
+    src_acts_filename = f"turn_{args.turn:02d}_activations.pt"
+    print(f"Loading source activations from {src_acts_filename} (turn {args.turn} pre-answer)")
     for src_class in realized:
         for src in src_runs[src_class]:
-            src_acts_path = run_dir / src.run_id / "turn_04_activations.pt"
+            src_acts_path = run_dir / src.run_id / src_acts_filename
             if not src_acts_path.exists():
                 print(f"  missing {src_acts_path}, skipping", file=sys.stderr)
                 continue
@@ -408,6 +423,7 @@ def main() -> int:
         "model": args.model,
         "torch_dtype": args.dtype,
         "layers": layers,
+        "turn": args.turn,
         "prompt_variant": args.prompt_variant,
         "n_source_per_class": args.n_source_per_class,
         "n_target_per_class": args.n_target_per_class,

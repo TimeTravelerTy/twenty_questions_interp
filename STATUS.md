@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M4 — phase 2a L27-L48 band patch also null on both argmax and logit-diff; the late-layer probe-decodable signal is off the reveal-token causal path at the pre-answer position. Phase 2b expands to all-layer single-position patch (decisive position-vs-layer test).
+**Current milestone:** M4 — phases 1/2a/2b sweep across {L29, L27-L48, L1-L48} layer scope at the turn-4 pre-answer position all null on both metrics. The pre-answer position is decisively not the reveal-token bottleneck. Phase 2c-i sweeps across earlier turns' pre-answer positions (free, uses existing saved activations).
 **Last agent:** Claude
-**Last updated:** 2026-04-25 (M4 phase 2a done in ~2min walltime on job `7260288`: patched all 22 layers from L27 through L48 simultaneously at the turn-4 pre-answer position. **Null on both metrics.** Argmax flip-rate matrix essentially identical to phase 1 (off-diagonals 0% across 19/20 deterministic targets). Logit-diff deltas all within ±0.12 logits against natural baseline margins of +2 to +10 logits — i.e. the band patch moves logits by 1-3% of the natural class separation. Treats the L29 null (D-35) and band null (D-36) jointly: the M3 turn-4 LR LOO 0.79 signal at L29-L48 is *legible* but **off the reveal-token causal path**. Dissociation pattern matches Heimersheim & Nanda 2024 / "Causality ≠ Decodability". See `docs/progress/M4-patch-turn4-band-null.md`. **Phase 2b decision (D-36):** run all-layer L1-L48 single-position patch as the decisive position-vs-layer test. Job `tq_m4_patch_turn4_12b_alllayers_20260425.sh` to submit next.)
+**Last updated:** 2026-04-25 (M4 phase 2b done in ~2min walltime on job `7260501`: patched all 48 decoder layers simultaneously at the turn-4 pre-answer position. **Null on argmax (every off-diagonal cell 0% flip), near-null on logit-diff** (deltas ±0.46 range, mostly *negative* on off-diagonals — patches push *away* from src). Cow→cow self-patch drops to 92% (horse leakage from prior fallback). Conclusion across phases 1/2a/2b: turn-4 pre-answer position is not the reveal-token bottleneck regardless of layer scope. The M3 turn-4 LR LOO 0.79 signal is *legible* but *off the causal path*. See `docs/progress/M4-patch-turn4-alllayers-null.md` and DECISIONS D-37. **Phase 2c-i:** cheap per-turn sweep using existing `turn_01..turn_04_activations.pt` files; `patch_turn4.py` to be extended with `--turn N` flag, then one bundled job runs all-layer patches at turn 1, 2, 3 pre-answer positions in sequence.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -106,26 +106,36 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step (M4 phase 2b):** decisive position-vs-layer test.
-Run `scripts/patch_turn4.py --layers 1,2,...,48` on the same n=80
-default collection — patch the entire residual stack at the single
-pre-answer position. Same two metrics as phase 2a (argmax flip-rate +
-logit-diff). Job script `jobs/tq_m4_patch_turn4_12b_alllayers_20260425.sh`
-on TSUBAME, ~2min walltime on gpu_h.
+**Next concrete step (M4 phase 2c-i):** sweep across earlier-turn
+pre-answer positions using already-saved activations. Each attempt
+directory has `turn_01_activations.pt` through `turn_04_activations.pt`
+on TSUBAME — same shape (49, 3840), captured at each turn's pre-answer
+position. So per-turn patching is free (no new captures needed).
 
-Decision tree on phase 2b outcome:
+Plan:
+1. Extend `scripts/patch_turn4.py` with `--turn N` (1..4, default 4) —
+   selects which turn's pre-answer position to patch and which
+   `turn_NN_activations.pt` file to load as the src vector.
+   Generalize the existing `_context_up_to_q4_preanswer` to
+   `_context_up_to_qN_preanswer` parameterized by N.
+2. Bundle one job script that runs the all-layer patch at turn 1,
+   turn 2, turn 3 in sequence (one model load amortized over three
+   experiments). Output: three JSON files
+   `runs/m4_patch_turnN_12b_default_L1-48all.json` for N in 1, 2, 3.
 
-- **Phase 2b is positive** (any cell shows non-trivial flip rate or
-  logit-diff delta >> 0.12 logits): the bottleneck is in *some* layer
-  band but L27-L48 wasn't enough — narrow back via an early-band patch
-  (e.g., `--layers 1,...,26`) to find the minimal sufficient locus.
-  This would correspond to hypothesis (1) — earlier-layer locus.
-- **Phase 2b is null too**: the pre-answer position itself is not the
-  reveal-token bottleneck regardless of layer. This is a definitive
-  result. Phase 2c then expands to a *position* band (last K pre-answer
-  tokens, or the full turn-4 user message), which requires re-collecting
-  src activations across a window of turn-4 positions — a separate
-  collection job on TSUBAME.
+Decision tree on phase 2c-i outcomes:
+
+- **Some turn flips reveals**: the bottleneck is at *that* turn's
+  pre-answer position. Narrow further by layer band; that turn's
+  pre-answer position becomes the new probe locus.
+- **All three turns null**: no single-position patch on any
+  pre-answer position is sufficient. Either the bottleneck is at
+  positions we haven't tested (turn-0 Ready output, turn-4 question
+  text positions), or class info is encoded redundantly across
+  positions. Phase 2c-ii then escalates to a **position-band patch**
+  with on-the-fly src capture (extend the script to forward-pass src
+  through `_context_up_to_qN_preanswer` and grab residuals at the last
+  K positions), patching tgt's last K positions simultaneously.
 
 **Methodological follow-up (deferred to whichever phase produces a
 positive signal):** the first-step logit-diff metric is unreliable for

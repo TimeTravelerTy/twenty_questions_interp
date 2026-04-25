@@ -849,3 +849,82 @@ locate where the animal-name token first becomes argmax-favored
 (currently we capture only step 0, which misses cases like dog reveals
 that begin "I was thinking of a dog").
 
+## 2026-04-25 — D-37: All-layer L1-L48 single-position patch is also null; pre-answer position is decisively not the reveal-token bottleneck
+
+Job `7260501` ran phase 2b: same n=80 default scale-up collection,
+same 16-cell trial design (5 src x 5 tgt per class, 400 patched
+trials + 20 baselines), with **all 48 decoder layers patched
+simultaneously** at the turn-4 pre-answer position. Output at
+`runs/m4_patch_turn4_12b_default_L1-48all.json`. Detailed writeup at
+`docs/progress/M4-patch-turn4-alllayers-null.md`.
+
+**Result:** null on argmax, near-null on logit-diff.
+
+- Off-diagonal flip rates: **0% across every cell**. The phase 1/2a
+  `cow->horse` 20% effect (`attempt_588` non-determinism) disappears
+  in phase 2b — patching the entire stack overwrites whatever
+  stochastic state was producing it.
+- Cow->cow self-patch drops from 100% (phase 1/2a) to 92% (2/25 went
+  to horse). The all-layer patch is strong enough to *destabilize*
+  even self-class reveals, but tips toward the model's prior (horse),
+  not toward src.
+- Logit-diff deltas range +-0.46, 3-4x phase 2a magnitude but
+  predominantly *negative* on off-diagonals — patches push *away*
+  from src class, not toward it. Horse row is the only mostly-positive
+  row (max +0.23), still <10% of natural baseline class margins.
+- Off-diagonal distributions show a horse/cow leakage pattern:
+  `dog->cow` produces 2/25 horses, `dog->horse` produces 2/25 cows,
+  `elephant->cow` produces 1/25 horses. The fallback is to the
+  attractor priors (horse + cow), never to src.
+
+**Interpretation — chain over phases 1/2a/2b:**
+
+| phase | layers patched | flip rate | logit-diff range |
+|---|---|---|---|
+| 1 | L29 only | 0% (sans `attempt_588`) | not measured |
+| 2a | L27-L48 (22) | 0% (sans `attempt_588`) | +-0.12 |
+| 2b | **L1-L48 (48)** | **0%** | +-0.46 (mostly neg) |
+
+Tripling the layer scope produces only noise increase, never a push
+toward src. **The turn-4 pre-answer position is decisively NOT in
+the reveal-token causal path, regardless of layer scope.** The class
+is *legible* there (M3 turn-4 LR LOO 0.79 @ L31, 3.2x chance) without
+*driving* the reveal. The reveal must compute via attention to other
+token positions in the dialogue prefix.
+
+This rules out hypothesis (1) from D-36 (earlier-layer locus) and
+confirms hypothesis (2) (other-position locus).
+
+**Decision — phase 2c method:**
+
+The cheapest informative test uses existing saved activations. Each
+attempt directory in the n=80 collection has `turn_01_activations.pt`
+through `turn_04_activations.pt` already on TSUBAME — saved residuals
+at the pre-answer position of *every* turn, all layers. So we can
+sweep across turns at zero capture cost.
+
+**Phase 2c-i (cheap, no new captures):** all-layer single-position
+patch at turn-1, turn-2, turn-3 pre-answer positions in turn. Three
+runs of `patch_turn4.py` with a new `--turn N` flag selecting which
+turn's saved activations to load and which tgt position to compute.
+~6 min total walltime in one bundled job script (one model load).
+
+Possible outcomes:
+
+- One turn flips reveals: the bottleneck is at that turn's
+  pre-answer position. We've localized class commitment to that
+  point in the dialogue. Narrow further by layer band.
+- All three turns null too: no single-position patch on any
+  pre-answer position is sufficient. Class info is either at
+  positions we haven't tested (turn-0 Ready output, turn-4 question
+  text positions) OR encoded redundantly across positions and
+  requires a position-band patch. Phase 2c-ii (position-band with
+  on-the-fly src capture) becomes the next escalation.
+
+**Methodological follow-up still deferred:** the first-step
+logit-diff metric remains unreliable for dog. Will fix when any
+positive signal emerges (and metric sensitivity becomes the
+bottleneck rather than position scope).
+
+
+
