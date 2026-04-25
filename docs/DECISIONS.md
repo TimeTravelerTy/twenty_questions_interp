@@ -779,3 +779,73 @@ prompt + kwargs produce different reveals across replays. Suspect KV
 cache or attention-impl drift. Investigate before any future patching
 work that depends on horse trials.
 
+## 2026-04-25 — D-36: L27-L48 layer-band patch is also null on both argmax and logit-diff; late-layer signal is off the reveal-token causal path
+
+Job `7260288` ran phase 2a per D-35: same n=80 default scale-up
+collection, same trial design (5 src x 5 tgt x 16 cells = 400 patched
+trials + 20 baselines), but patching all 22 layers from L27 through L48
+simultaneously at the turn-4 pre-answer position. Output at
+`runs/m4_patch_turn4_12b_default_L27-48band.json`. Detailed writeup at
+`docs/progress/M4-patch-turn4-band-null.md`.
+
+**Result:** null on both metrics.
+
+- Argmax flip-rate matrix essentially identical to phase 1: diagonals
+  100% (cow/dog/elephant) / 84% (horse, same `attempt_588` instability),
+  off-diagonals 0% across 19 of 20 deterministic targets, only
+  `cow->horse` 20% (same single non-deterministic target).
+- Logit-diff deltas (patched - baseline) all within +/- 0.12 logits.
+  Natural baseline `logit[gt] - logit[next_best]` margins span +2 to +10
+  logits across cow/elephant/horse targets. So the patch moves logits
+  by **1-3% of the natural inter-class separation** — clean null on
+  the continuous metric.
+- Logit-diff for dog targets is unreliable: dog reveals don't begin
+  with the ` Dog` token at step 0 (first-token logit margin is
+  *negative* for dog while parsed reveal is dog 100%), so step-0
+  logit-diff captures noise on the dog row. Cow/elephant/horse rows
+  remain reliable.
+
+**Interpretation:** the L29 null (D-35) and the L27-L48 band null
+together rule out both forms of "narrow late-layer locus is causal":
+
+1. Not a single missed layer (band covers L27-L48 wholesale).
+2. Not redundancy hidden across late layers (22 layers patched
+   simultaneously and nothing moves).
+
+So the M3 turn-4 LR LOO 0.79 @ L31 signal is *legible* at L29-L48 but
+**off the reveal-token causal path** at the pre-answer position. The
+class identity is decodable there without driving the downstream
+reveal. This dissociation is the same pattern documented in
+"Causality != Decodability" (arXiv 2510.09794) and Heimersheim & Nanda
+2024 (arXiv 2404.15255).
+
+**Decision — phase 2b method:**
+
+Two structural hypotheses remain:
+
+1. **Earlier-layer locus.** Class info is in L1-L26 at the pre-answer
+   position; late layers carry it forward inertly. Tested by an
+   early-band patch.
+2. **Other-position locus.** The pre-answer position is not the
+   bottleneck at all. Reveal-token computation pulls from other
+   positions in the dialogue (the secret-choice commit point at
+   turn 0, the cumulative yes/no pattern across turns 1-4, etc.).
+   Single-position patching nulls at every layer in this case.
+
+The cheapest single experiment that distinguishes these: **all-layer
+single-position patch** (`--layers 1,...,48`) at the same pre-answer
+position. If null, position is the bottleneck axis -> hypothesis (2)
+and phase 2c expands to a position band (requires re-collecting src
+activations across positions). If positive, narrow back to find the
+minimal sufficient layer band -> hypothesis (1).
+
+Phase 2b runs L1-L48 in `tq_m4_patch_turn4_12b_alllayers_20260425.sh`,
+~2 min walltime on gpu_h. No new activation captures needed; existing
+`turn_04_activations.pt` covers all layers.
+
+**Methodological follow-up:** when any positive signal emerges,
+upgrade the logit-diff metric to scan a few generation steps and
+locate where the animal-name token first becomes argmax-favored
+(currently we capture only step 0, which misses cases like dog reveals
+that begin "I was thinking of a dog").
+

@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M4 — Phase 1 single-layer L29 single-position patch is null on argmax; phase 2a broadens to L27-L48 layer band + logit-diff metric.
+**Current milestone:** M4 — phase 2a L27-L48 band patch also null on both argmax and logit-diff; the late-layer probe-decodable signal is off the reveal-token causal path at the pre-answer position. Phase 2b expands to all-layer single-position patch (decisive position-vs-layer test).
 **Last agent:** Claude
-**Last updated:** 2026-04-25 (M4 phase 1 done: 400 patched trials at L29 turn-4 pre-answer on the n=80 default scale-up. **Null on argmax flip-rate.** Off-diagonal flips are 0% across 19 of 20 target runs; the only "effects" trace to `attempt_588`, a horse target whose no-patch baseline is already non-deterministic (returns `cow` instead of `horse` at greedy replay). Diagonals 100% (cow/dog/elephant) / 88% (horse, same `attempt_588` issue). See `docs/progress/M4-patch-turn4-L29-null.md`. **Decision (D-35):** rather than a bare single-position layer sweep, broaden first per Heimersheim & Nanda 2024 best practice — patch L27-L48 layer band simultaneously at the pre-answer position, and add `logit[src_first_tok] - logit[tgt_first_tok]` as a continuous metric alongside argmax flip-rate. `scripts/patch_turn4.py` extended; phase 2a job to follow.)
+**Last updated:** 2026-04-25 (M4 phase 2a done in ~2min walltime on job `7260288`: patched all 22 layers from L27 through L48 simultaneously at the turn-4 pre-answer position. **Null on both metrics.** Argmax flip-rate matrix essentially identical to phase 1 (off-diagonals 0% across 19/20 deterministic targets). Logit-diff deltas all within ±0.12 logits against natural baseline margins of +2 to +10 logits — i.e. the band patch moves logits by 1-3% of the natural class separation. Treats the L29 null (D-35) and band null (D-36) jointly: the M3 turn-4 LR LOO 0.79 signal at L29-L48 is *legible* but **off the reveal-token causal path**. Dissociation pattern matches Heimersheim & Nanda 2024 / "Causality ≠ Decodability". See `docs/progress/M4-patch-turn4-band-null.md`. **Phase 2b decision (D-36):** run all-layer L1-L48 single-position patch as the decisive position-vs-layer test. Job `tq_m4_patch_turn4_12b_alllayers_20260425.sh` to submit next.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -106,30 +106,33 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step (M4 phase 2a):** broaden along the residual stream.
-Run `scripts/patch_turn4.py` with `--layers 27,28,...,48` (full late
-band) at the same single pre-answer position on the n=80 default
-collection, and capture the new `logit_diff_delta` matrix in the JSON.
-Two metrics in one experiment:
+**Next concrete step (M4 phase 2b):** decisive position-vs-layer test.
+Run `scripts/patch_turn4.py --layers 1,2,...,48` on the same n=80
+default collection — patch the entire residual stack at the single
+pre-answer position. Same two metrics as phase 2a (argmax flip-rate +
+logit-diff). Job script `jobs/tq_m4_patch_turn4_12b_alllayers_20260425.sh`
+on TSUBAME, ~2min walltime on gpu_h.
 
-1. **Categorical flip rate** (existing) — should still null if both
-   redundancy and off-causal-path interpretations are wrong; should
-   light up if the band intervention is sufficient.
-2. **Logit-diff** (new) — `logit[src_first_tok] - logit[tgt_first_tok]`
-   at the first reveal-generation step, mean over trials per cell, with
-   per-tgt-run baseline subtracted. Continuous, sensitive to partial
-   effects that don't flip argmax.
+Decision tree on phase 2b outcome:
 
-If phase 2a flips reveals (or moves logit-diff materially): narrow back
-down to find the minimal sufficient layer sub-band. If phase 2a is
-*also* null: the late-layer band is genuinely off the reveal-token
-causal path, and phase 2b expands to a *position* band (would require
-re-collecting src activations across a window of turn-4 positions, not
-just the pre-answer token).
+- **Phase 2b is positive** (any cell shows non-trivial flip rate or
+  logit-diff delta >> 0.12 logits): the bottleneck is in *some* layer
+  band but L27-L48 wasn't enough — narrow back via an early-band patch
+  (e.g., `--layers 1,...,26`) to find the minimal sufficient locus.
+  This would correspond to hypothesis (1) — earlier-layer locus.
+- **Phase 2b is null too**: the pre-answer position itself is not the
+  reveal-token bottleneck regardless of layer. This is a definitive
+  result. Phase 2c then expands to a *position* band (last K pre-answer
+  tokens, or the full turn-4 user message), which requires re-collecting
+  src activations across a window of turn-4 positions — a separate
+  collection job on TSUBAME.
 
-Phase 2a job script: `tq_m4_patch_turn4_12b_band_20260425.sh` (to
-write/scp/qsub). Same gpu_h MIG slice; ~5x walltime of phase 1 from
-the layer-band hook count, well within 02:00:00.
+**Methodological follow-up (deferred to whichever phase produces a
+positive signal):** the first-step logit-diff metric is unreliable for
+classes whose reveal doesn't begin with the animal-name token (dog at
+phase 2a). When a positive signal emerges, upgrade the metric to scan
+several generation steps and locate where the animal-name token first
+becomes argmax-favored.
 
 **Side investigation (non-blocking):** `attempt_588` is non-deterministic
 at `do_sample=False`. On-disk reveal `horse`, replayed reveal `cow`. Same
