@@ -705,3 +705,77 @@ Decision:
    concentrated or more fragile would both be interesting; the
    "early decision vs late crystallization" question becomes easier
    to answer when class diversity is no longer a confound.
+
+## 2026-04-25 — D-35: Single-layer L29 turn-4 pre-answer patch is null on argmax; broaden to a layer band before sweeping
+
+Job `tq_m4_patch_turn4_12b_20260424.sh` (gpu_h MIG slice) ran the M4
+phase-1 patching experiment: L29 turn-4 pre-answer residual replaced
+with each (src, tgt) class pair from the n=80 default scale-up
+collection (`{cow, dog, elephant, horse}`, 5 src × 5 tgt × 16 cells =
+400 patched trials + 20 baselines). Greedy reveal, argmax canonical
+match. Output at `runs/m4_patch_turn4_12b_default_L29.json`. Detailed
+writeup in `docs/progress/M4-patch-turn4-L29-null.md`.
+
+**Result:** off-diagonal flip rate 0% across 19 of 20 target runs. The
+only "effect" is `cow->horse` at 5/25 = 20%, all on a single horse
+target (`attempt_588`) whose no-patch baseline is already
+non-deterministic at greedy `do_sample=False` (returns `cow` instead of
+the on-disk `horse`). Diagonals: cow/dog/elephant 100%, horse 88% (same
+`attempt_588` instability). The L29 single-position single-layer patch
+does not flip reveals on any deterministic target.
+
+**Interpretation:** consistent with two well-documented patterns in the
+activation-patching literature (Heimersheim & Nanda 2024,
+arXiv 2404.15255; "Causality != Decodability" arXiv 2510.09794):
+
+1. **Redundancy** — class info encoded across nearby layers/positions,
+   single-residual replacement washed out by the rest of the stream.
+2. **Decodable != causal** — L29 holds the class signature but isn't on
+   the reveal-token causal path; very-late layers write to the
+   unembedding without funneling through L29.
+
+Both interpretations leave decodability (LR 0.79 @ L31) intact while
+producing a causal null. Both are scientifically interesting findings.
+
+**Decision — phase 2a method:**
+
+1. **Skip a bare single-position layer sweep.** A layer sweep at the
+   same single pre-answer position only distinguishes interpretation
+   (2) from (1) if the answer is (2). If interpretation (1) is right,
+   every single-layer single-position sweep also nulls — non-diagnostic
+   for the cost of 7x compute.
+2. **Broaden first, then narrow** (Heimersheim & Nanda 2024 sec 4
+   recommendation: "begin with broad interventions then refine to
+   granular components"). Phase 2a patches the full **L27-L48 layer
+   band simultaneously** at the same pre-answer position. Forces the
+   entire late-layer band to be src's representation. If null, both
+   interpretations of "narrow late-layer locus is causal" are ruled
+   out and the probe-decodable signal is genuinely off the reveal-token
+   causal path. If positive, narrow back down via a layer sub-sweep to
+   find the minimal sufficient site.
+3. **Add logit-difference as a continuous metric.** Heimersheim & Nanda
+   2024 strongly recommend `logit[answer_a] - logit[answer_b]` over
+   discrete flips: continuous, linear in residual contributions, and
+   sensitive to partial effects that don't flip argmax. `patch_turn4.py`
+   now captures first-step generation logits via `output_scores=True`
+   and reports per-cell mean
+   `logit[src_first_tok] - logit[tgt_first_tok]` with per-tgt-run
+   baseline subtraction. Phase 2a runs both metrics on the same patched
+   trials.
+4. **Phase 2b deferred.** If 2a is also null on both metrics, expand to
+   a position band (last K pre-answer tokens). Requires re-collecting
+   src activations across a position window — not part of phase 2a.
+
+**Why not multi-position now:** the saved `turn_04_activations.pt`
+captures only the pre-answer token, one vector per layer. Multi-position
+patching needs new activation captures (cheap if we re-collect, but a
+separate engineering step). Layer-band patching is free with current
+data — both `_make_patch_hook` and the saved tensor support it
+unchanged.
+
+**Side investigation flagged (non-blocking):** `attempt_588` is
+non-deterministic at greedy `do_sample=False, dtype=bfloat16`. Same
+prompt + kwargs produce different reveals across replays. Suspect KV
+cache or attention-impl drift. Investigate before any future patching
+work that depends on horse trials.
+

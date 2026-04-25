@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M3 — 12B self-chosen turn-4 pre-answer decodability confirmed across two class regimes (4-class default 3.2× chance, 5-class prompt variant 2.7× chance); next step is M4 causal patching at L29-L31.
+**Current milestone:** M4 — Phase 1 single-layer L29 single-position patch is null on argmax; phase 2a broadens to L27-L48 layer band + logit-diff metric.
 **Last agent:** Claude
-**Last updated:** 2026-04-24 (Prompt-variant probe, job `7246440`: added `less_obvious` nudge to `self_chosen_prompt` and ran 600 greedy attempts on 12B 20-bank. **Attractor partially moved**: dog displaced, gorilla (102) + kangaroo (21) promoted to quota, penguin appeared once — 6 parsed classes, effective 3.90, top-1 still 38.5% (horse). 14/20 bank classes still never realized. Ran `decode_turns.py` on the 101 kept runs: turn-4 LR LOO 0.54 @ L29 (chance 0.20, **2.7× chance**), L27-48 mean 0.51. Critically, gorilla+kangaroo were never in any prior 12B collection, yet the late-layer LR still decodes — so **turn-4 pre-answer generalizes to new classes**, which is the first real generalization check we have on the M3 probe. Peak layer stable at L29. See `docs/progress/M3-12b-selfchosen-lessobv.md`. D-34 to follow in commit.)
+**Last updated:** 2026-04-25 (M4 phase 1 done: 400 patched trials at L29 turn-4 pre-answer on the n=80 default scale-up. **Null on argmax flip-rate.** Off-diagonal flips are 0% across 19 of 20 target runs; the only "effects" trace to `attempt_588`, a horse target whose no-patch baseline is already non-deterministic (returns `cow` instead of `horse` at greedy replay). Diagonals 100% (cow/dog/elephant) / 88% (horse, same `attempt_588` issue). See `docs/progress/M4-patch-turn4-L29-null.md`. **Decision (D-35):** rather than a bare single-position layer sweep, broaden first per Heimersheim & Nanda 2024 best practice — patch L27-L48 layer band simultaneously at the pre-answer position, and add `logit[src_first_tok] - logit[tgt_first_tok]` as a continuous metric alongside argmax flip-rate. `scripts/patch_turn4.py` extended; phase 2a job to follow.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -106,49 +106,36 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step:** both diversity probes are done —
-temperature-null (D-33) closed the sampling branch, and the
-prompt-variant probe (D-34, `docs/progress/M3-12b-selfchosen-lessobv.md`)
-showed that the attractor is partly prompt-fragile and that the
-turn-4 LR LOO signal generalizes to new classes (gorilla, kangaroo)
-at 2.7× chance. The headline M3 self-chosen result now spans two
-realized-class regimes; further diversity probes would be attractor
-tourism.
+**Next concrete step (M4 phase 2a):** broaden along the residual stream.
+Run `scripts/patch_turn4.py` with `--layers 27,28,...,48` (full late
+band) at the same single pre-answer position on the n=80 default
+collection, and capture the new `logit_diff_delta` matrix in the JSON.
+Two metrics in one experiment:
 
-**Pivot to M4 — causal patching at turn-4 L29-L31.** The first M4
-artifact is a patching experiment using the existing n=80 default
-scale-up collection as the base (balanced 4 classes, n=20 each):
+1. **Categorical flip rate** (existing) — should still null if both
+   redundancy and off-causal-path interpretations are wrong; should
+   light up if the band intervention is sufficient.
+2. **Logit-diff** (new) — `logit[src_first_tok] - logit[tgt_first_tok]`
+   at the first reveal-generation step, mean over trials per cell, with
+   per-tgt-run baseline subtracted. Continuous, sensitive to partial
+   effects that don't flip argmax.
 
-1. For each pair of source class (C_src) and target class (C_tgt)
-   in `{elephant, cow, dog, horse}`:
-   - Pick a turn-4 pre-answer residual at L29 (or the L29-L31 band,
-     averaged) from a C_src run, and patch it into a C_tgt run at the
-     same position.
-   - Regenerate from the patched state through the rest of turn 4 and
-     the reveal turn.
-   - Score: (a) whether the reveal token flips toward C_src, and
-     (b) whether the yes/no answer on turn 4 flips to match C_src's
-     answer pattern (which is degenerate on `{elephant,cow,dog,horse}`
-     so this is only informative on questions where source/target
-     differ; panel expansion may be needed).
-2. The outcome is a 4x4 flip-rate matrix; a genuine causal locus
-   should make diagonal-vs-off-diagonal differ materially.
-3. Secondary: repeat the same patching experiment on the
-   `less_obvious` 5-class collection as a generalization check,
-   particularly for gorilla/kangaroo that are outside the default
-   attractor.
+If phase 2a flips reveals (or moves logit-diff materially): narrow back
+down to find the minimal sufficient layer sub-band. If phase 2a is
+*also* null: the late-layer band is genuinely off the reveal-token
+causal path, and phase 2b expands to a *position* band (would require
+re-collecting src activations across a window of turn-4 positions, not
+just the pre-answer token).
 
-Before writing the patching script, stage design questions:
-  - single-token residual patch vs full-range patch at turn-4
-    pre-answer?
-  - L29 only, L29-L31 averaged, or layer sweep?
-  - need the `less_obvious` attempts' activations remote-staged at
-    full size (currently we only have kept-subset), or is the default
-    n=80 enough for M4 phase 1?
+Phase 2a job script: `tq_m4_patch_turn4_12b_band_20260425.sh` (to
+write/scp/qsub). Same gpu_h MIG slice; ~5x walltime of phase 1 from
+the layer-band hook count, well within 02:00:00.
 
-Default plan: start with L29 single-layer, single-position (last
-pre-answer token), default n=80 collection only. One-layer patch is
-the cleanest first experiment. Expand if the signal is noisy.
+**Side investigation (non-blocking):** `attempt_588` is non-deterministic
+at `do_sample=False`. On-disk reveal `horse`, replayed reveal `cow`. Same
+prompt, same kwargs. Suspect KV-cache or attention-impl drift in
+bfloat16. Worth ~30min of investigation before relying on horse trials
+in subsequent patching work.
 
 **Do not:**
 - repeat 4-way narrowed self-chosen prompts (collapse is established)
@@ -156,6 +143,10 @@ the cleanest first experiment. Expand if the signal is noisy.
   apply there
 - spend more cycles on Ready-state self-chosen decoding as the main branch
 - sweep more positions on the 80-run dataset — turn-4 L26-48 is locked
+- run a bare single-position layer sweep as the next M4 experiment.
+  Heimersheim & Nanda 2024 recommend low-granularity (band) interventions
+  *first*, then refine. A bare layer sweep nulls under both the
+  redundancy and off-path interpretations and is non-diagnostic.
 
 **Open threads on the backlog:**
 - **Bigger-model ladder (D-05):** 4B's salmon attractor may be model-specific.

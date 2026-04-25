@@ -1,18 +1,23 @@
 """M4 — Causal patching at turn-4 pre-answer residual.
 
 For each (source-class, target-class) pair, replace the target run's
-residual-stream output at `layer L`, `turn-4 pre-answer token position`
-with the source run's saved L-layer residual (from
-`turn_04_activations.pt`), then continue the forward pass through the
-end-of-game reveal prompt and parse the canonical reveal.
+residual-stream output at one or more `layers`, at the `turn-4
+pre-answer token position`, with the source run's saved layer residuals
+(from `turn_04_activations.pt`), then continue the forward pass through
+the end-of-game reveal prompt and read both the parsed reveal token and
+the first-step reveal logits.
 
-Outputs:
-- Per-trial records: (src_class, tgt_class, src_run, tgt_run, patched_reveal, patched_canonical)
-- Per-(src, tgt) summary: flip-to-src rate, flip-to-other rate, kept-tgt rate, unparsed count.
-- Per-target baseline (no hook) reveal for sanity.
+Two metrics:
+1. Categorical flip rate: argmax of the first generated token via
+   `parse_reveal_to_canonical`. Discrete; coarse on a 4-class panel.
+2. Logit-difference (Heimersheim & Nanda 2024 best practice): at the
+   first reveal-generation step, compute
+   `logits[src_first_tok] - logits[tgt_first_tok]` per trial. Continuous;
+   sensitive to partial effects that don't flip argmax.
 
-Scope phase 1: single-layer single-position patch, greedy generation,
-default self-chosen 4-question panel (D-31 locked probe position).
+Phase 1 used `--layers 29` (single layer single position). Phase 2a
+broadens along the residual stream by accepting `--layers L1,L2,...` to
+patch a band simultaneously. Position is still single (pre-answer).
 """
 from __future__ import annotations
 
@@ -48,9 +53,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model", default=MODEL_MAIN)
     p.add_argument("--device", default="auto")
     p.add_argument("--dtype", default="bfloat16", choices=["float32", "bfloat16", "float16"])
-    p.add_argument("--layer", type=int, default=29,
-                   help="Residual-stream layer index to patch (index into "
-                        "hidden_states tuple; 0=embedding, 1=block 0 out, ...).")
+    p.add_argument("--layer", type=int, default=None,
+                   help="Single residual-stream layer index to patch. "
+                        "Either --layer or --layers must be provided. "
+                        "Index into hidden_states tuple: 0=embedding, "
+                        "1=block 0 out, ...")
+    p.add_argument("--layers", type=str, default=None,
+                   help="Comma-separated layer band, e.g. '27,28,...,48' or "
+                        "'29,30,31'. Overrides --layer. All listed layers are "
+                        "patched at the pre-answer position simultaneously.")
     p.add_argument("--n-source-per-class", type=int, default=5)
     p.add_argument("--n-target-per-class", type=int, default=5)
     p.add_argument("--prompt-variant", default="default")
@@ -145,15 +156,47 @@ def _make_patch_hook(position: int, src_residual: torch.Tensor):
 @torch.no_grad()
 def _generate_reveal_greedy(
     handle: ModelHandle, model_inputs: dict[str, torch.Tensor], max_new_tokens: int = 48
-) -> str:
+) -> tuple[str, torch.Tensor]:
+    """Greedy decode and also return first-step logits over vocab.
+
+    Returns (decoded_text, first_step_logits) where first_step_logits is a
+    1-D tensor on CPU with shape (vocab_size,).
+    """
     gen = handle.model.generate(
         **model_inputs,
         max_new_tokens=max_new_tokens,
         pad_token_id=handle.tokenizer.eos_token_id,
         do_sample=False,
+        output_scores=True,
+        return_dict_in_generate=True,
     )
-    new_tokens = gen[0, model_inputs["input_ids"].shape[1]:]
-    return handle.tokenizer.decode(new_tokens, skip_special_tokens=True)
+    new_tokens = gen.sequences[0, model_inputs["input_ids"].shape[1]:]
+    text = handle.tokenizer.decode(new_tokens, skip_special_tokens=True)
+    first_step_logits = gen.scores[0][0].detach().to("cpu", dtype=torch.float32)
+    return text, first_step_logits
+
+
+def _build_class_first_token_ids(
+    handle: ModelHandle, realized: list[str], bank: Any
+) -> dict[str, int]:
+    """Map each realized class id to the first token id of its display name
+    when emitted as the start of a reveal answer (with a leading space).
+
+    Reveal prompt asks for "only the name of that animal", so under SentencePiece
+    Gemma tokenizers the first generated token is typically " <Name>" or " <name>".
+    We tokenize ' Cow', ' Dog', ' Elephant', ' Horse' (capitalized variant) since
+    those are the most common reveal openings in observed runs.
+    """
+    display_by_id = {c.id: c.display for c in bank.candidates}
+    out: dict[str, int] = {}
+    for cid in realized:
+        display = display_by_id[cid]
+        token_str = " " + display.capitalize()
+        ids = handle.tokenizer.encode(token_str, add_special_tokens=False)
+        if not ids:
+            raise RuntimeError(f"Empty tokenization for {token_str!r}")
+        out[cid] = ids[0]
+    return out
 
 
 def main() -> int:
@@ -176,14 +219,23 @@ def main() -> int:
         "bfloat16": torch.bfloat16,
         "float16": torch.float16,
     }[args.dtype]
+    if args.layers is not None:
+        layers = [int(x) for x in args.layers.split(",") if x.strip()]
+    elif args.layer is not None:
+        layers = [args.layer]
+    else:
+        print("must provide --layer or --layers", file=sys.stderr)
+        return 2
+    if any(L < 1 for L in layers):
+        print("layers must be >= 1 (0 is embeddings, not a residual block)", file=sys.stderr)
+        return 2
+    print(f"Patching layers: {layers}")
+
     handle = load_model(args.model, device=args.device, dtype=dtype)
     model = handle.model
     # For Gemma3, hidden_states index L corresponds to the output of layer L-1.
     # The exact attribute path depends on model variant; try common layouts.
-    layer_block_idx = args.layer - 1
-    if layer_block_idx < 0:
-        print("--layer must be >= 1 (0 is embeddings, not a residual block)", file=sys.stderr)
-        return 2
+    max_block_idx = max(layers) - 1
     layer_list = None
     for path in ("model.layers", "model.language_model.layers",
                  "language_model.model.layers", "language_model.layers"):
@@ -194,22 +246,24 @@ def main() -> int:
                 ok = False
                 break
             obj = getattr(obj, part)
-        if ok and hasattr(obj, "__len__") and len(obj) > layer_block_idx:
+        if ok and hasattr(obj, "__len__") and len(obj) > max_block_idx:
             layer_list = obj
             print(f"Found decoder layers at model.{path} (n={len(obj)})")
             break
     if layer_list is None:
-        # Last-resort scan: find the first ModuleList whose name ends in `.layers`.
         import torch.nn as nn
         for name, mod in model.named_modules():
-            if isinstance(mod, nn.ModuleList) and name.endswith(".layers") and len(mod) > layer_block_idx:
+            if isinstance(mod, nn.ModuleList) and name.endswith(".layers") and len(mod) > max_block_idx:
                 layer_list = mod
                 print(f"Found decoder layers at {name} (n={len(mod)})")
                 break
     if layer_list is None:
         print("Could not locate decoder-layer ModuleList; aborting.", file=sys.stderr)
         return 3
-    target_block = layer_list[layer_block_idx]
+    target_blocks = {L: layer_list[L - 1] for L in layers}
+
+    class_first_tok = _build_class_first_token_ids(handle, realized, bank)
+    print(f"Class first-token ids: {class_first_tok}")
 
     # Pick n runs per class for source and target (distinct sets so we don't patch a run into itself).
     src_runs: dict[str, list[RunManifest]] = {}
@@ -225,18 +279,22 @@ def main() -> int:
 
     # ---- 1) No-patch baseline for each target: greedy reveal on the target context. ----
     baseline_records: list[dict[str, Any]] = []
+    baseline_class_logits: dict[str, dict[str, float]] = {}  # tgt_run -> {class_id: logit}
     t0 = time.time()
     for tgt_class, runs in tgt_runs.items():
         for tgt in runs:
             inputs = _context_with_turn4_and_reveal(handle, tgt, bank, args.prompt_variant)
-            raw = _generate_reveal_greedy(handle, inputs)
+            raw, first_logits = _generate_reveal_greedy(handle, inputs)
             canon = parse_reveal_to_canonical(raw, bank)
+            class_logits = {cid: float(first_logits[tid]) for cid, tid in class_first_tok.items()}
+            baseline_class_logits[tgt.run_id] = class_logits
             baseline_records.append({
                 "tgt_class": tgt_class,
                 "tgt_run": tgt.run_id,
                 "baseline_reveal_raw": raw.strip(),
                 "baseline_canonical": canon,
                 "original_reveal_canonical": tgt.reveal_canonical_id,
+                "baseline_class_logits": class_logits,
             })
     print(f"Baselines: {len(baseline_records)} runs in {time.time()-t0:.1f}s")
 
@@ -261,7 +319,7 @@ def main() -> int:
                 print(f"  missing {src_acts_path}, skipping", file=sys.stderr)
                 continue
             src_acts = torch.load(src_acts_path, map_location="cpu")  # (n_layers+1, hidden)
-            src_residual_L = src_acts[args.layer].to(torch.float32)
+            src_residuals_per_layer = {L: src_acts[L].to(torch.float32) for L in layers}
 
             for tgt_class in realized:
                 for tgt in tgt_runs[tgt_class]:
@@ -271,14 +329,19 @@ def main() -> int:
                     if pos >= inputs["input_ids"].shape[1]:
                         print(f"  pos {pos} >= seq len {inputs['input_ids'].shape[1]} for tgt {tgt.run_id}", file=sys.stderr)
                         continue
-                    hook_h = target_block.register_forward_hook(
-                        _make_patch_hook(pos, src_residual_L)
-                    )
+                    hook_handles = []
+                    for L in layers:
+                        h = target_blocks[L].register_forward_hook(
+                            _make_patch_hook(pos, src_residuals_per_layer[L])
+                        )
+                        hook_handles.append(h)
                     try:
-                        raw = _generate_reveal_greedy(handle, inputs)
+                        raw, first_logits = _generate_reveal_greedy(handle, inputs)
                     finally:
-                        hook_h.remove()
+                        for h in hook_handles:
+                            h.remove()
                     canon = parse_reveal_to_canonical(raw, bank)
+                    class_logits = {cid: float(first_logits[tid]) for cid, tid in class_first_tok.items()}
                     patched_records.append({
                         "src_class": src_class,
                         "src_run": src.run_id,
@@ -287,6 +350,7 @@ def main() -> int:
                         "pos": pos,
                         "patched_reveal_raw": raw.strip(),
                         "patched_canonical": canon,
+                        "patched_class_logits": class_logits,
                     })
                     if trial % 20 == 0 or trial == total_trials:
                         print(f"  [{trial}/{total_trials}] src={src_class}/{src.run_id} tgt={tgt_class}/{tgt.run_id} → {canon}")
@@ -305,6 +369,20 @@ def main() -> int:
             for r in cell:
                 c = r["patched_canonical"] or "__unparsed__"
                 dist[c] = dist.get(c, 0) + 1
+            # Logit-diff stats: mean over trials of logit[src_class] - logit[tgt_class].
+            # Reference baseline: same difference computed without any patch on the
+            # tgt_run only — the natural pre-patch separation between src and tgt logits.
+            patch_diffs = [
+                r["patched_class_logits"][src_class] - r["patched_class_logits"][tgt_class]
+                for r in cell
+            ]
+            base_diffs = [
+                baseline_class_logits[r["tgt_run"]][src_class]
+                - baseline_class_logits[r["tgt_run"]][tgt_class]
+                for r in cell
+            ]
+            mean_patch = sum(patch_diffs) / n if n else None
+            mean_base = sum(base_diffs) / n if n else None
             summaries[f"{src_class}->{tgt_class}"] = {
                 "n": n,
                 "flip_to_src": flip_to_src,
@@ -316,17 +394,25 @@ def main() -> int:
                 ),
                 "unparsed": unparsed,
                 "distribution": dist,
+                "logit_diff_patched": mean_patch,
+                "logit_diff_baseline": mean_base,
+                "logit_diff_delta": (
+                    mean_patch - mean_base
+                    if mean_patch is not None and mean_base is not None
+                    else None
+                ),
             }
 
     results = {
         "run_dir": str(run_dir),
         "model": args.model,
         "torch_dtype": args.dtype,
-        "layer": args.layer,
+        "layers": layers,
         "prompt_variant": args.prompt_variant,
         "n_source_per_class": args.n_source_per_class,
         "n_target_per_class": args.n_target_per_class,
         "realized_classes": realized,
+        "class_first_token_ids": class_first_tok,
         "baselines": baseline_records,
         "patched_trials": patched_records,
         "summaries": summaries,
@@ -337,7 +423,7 @@ def main() -> int:
         json.dump(results, f, indent=2)
     print(f"Wrote {out_path}")
 
-    # Console summary matrix
+    # Console summary matrices
     print()
     print(f"Flip-to-source rate matrix (row=src, col=tgt):")
     header = "  src\\tgt | " + " | ".join(f"{c[:8]:>8}" for c in realized)
@@ -349,6 +435,19 @@ def main() -> int:
             s = summaries[f"{src_class}->{tgt_class}"]
             v = s["flip_to_src"]
             row.append(f"{(v or 0)*100:7.1f}%")
+        print("  " + " | ".join(row[0:1] + row[1:]))
+
+    print()
+    print("Logit-diff delta matrix (patched - baseline) for logit[src] - logit[tgt]:")
+    print("Positive = patch pushes reveal toward src. Diagonals should be ~0 (self-patch).")
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+    for src_class in realized:
+        row = [f"  {src_class[:8]:>8} |"]
+        for tgt_class in realized:
+            s = summaries[f"{src_class}->{tgt_class}"]
+            d = s["logit_diff_delta"]
+            row.append(f"{(d or 0):+7.2f} ")
         print("  " + " | ".join(row[0:1] + row[1:]))
     return 0
 
