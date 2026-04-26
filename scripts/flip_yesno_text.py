@@ -5,24 +5,26 @@ under counterfactual dialogues where exactly one yes/no answer text has
 been flipped (Yes -> No or No -> Yes). Pure behavior — no patching,
 just rebuilding the chat context with one answer literal changed.
 
-This directly tests the M4 phase 2c-iii (D-39) "improvisation"
-hypothesis: that the model re-derives the class at reveal time from
-accumulated dialogue evidence, rather than reading off a stored
-commitment.
+Two outputs per trial:
+1. Greedy reveal text + parsed canonical class (the behavioral signal
+   that established improvisation in D-40).
+2. **Logit-lens reading** at the pre_reveal_gen position, across ALL
+   layers, for ALL 20 bank-class first-tokens. This addresses the
+   "suppressed pre-commitment" worry: even if the original class isn't
+   the argmax at the final layer, it might still be elevated mid-network
+   and get suppressed by late layers (a documented pattern, e.g. negative
+   name movers in IOI). The per-layer logit trajectory for the original
+   class vs the flipped-consistent class lets us distinguish:
+   - Pure improvisation: orig_class logit tracks any-other-class baseline
+     across all layers.
+   - Suppressed pre-commitment: orig_class logit is elevated mid-network
+     then decays toward final.
+   - Concurrent consideration: orig_class rises alongside new class until
+     new overtakes.
 
-Predictions (per D-39):
-- If the model uses dialogue evidence: flipping a yes/no answer should
-  change the reveal — either to a different class within the attractor
-  set, or out to a less-frequent class consistent with the new pattern.
-- If the model does NOT use dialogue evidence: flipping has no effect;
-  the original reveal class persists.
-- Asymmetry across turns is informative: if flipping turn-4 matters
-  more than flipping turn-1, the most recent constraint dominates the
-  re-derivation. If they matter equally, the model treats the full
-  history symmetrically.
-
-Output: per-trial JSON with original class, flipped turn, flipped
-answer pattern, and the resulting reveal canonical / raw text.
+Caveat on early layers: logit lens at L0-~L15 is generally noisy because
+the residual stream isn't yet in the unembedding's basis. Focus
+interpretation on L20-L48.
 """
 from __future__ import annotations
 
@@ -65,6 +67,9 @@ def parse_args() -> argparse.Namespace:
                         "(matches M3 scale-up methodology).")
     p.add_argument("--turns-to-flip", type=str, default="1,2,3,4",
                    help="Comma-separated turn indices (1..4) to flip. Default all 4.")
+    p.add_argument("--logit-lens", action="store_true",
+                   help="Capture per-layer logit-lens readings at pre_reveal_gen "
+                        "across all 20 bank-class first-tokens. Adds ~2x to walltime.")
     return p.parse_args()
 
 
@@ -115,18 +120,103 @@ def _build_full_reveal_inputs(
     return _build_chat_input_ids(handle, rendered, extra_turns=extra)
 
 
+def _bank_first_token_ids(handle: ModelHandle, bank) -> dict[str, int]:
+    """Map every bank candidate id -> first token id of " <Display>"
+    (Gemma SentencePiece picks up the leading space)."""
+    out: dict[str, int] = {}
+    for c in bank.candidates:
+        token_str = " " + c.display.capitalize()
+        ids = handle.tokenizer.encode(token_str, add_special_tokens=False)
+        if not ids:
+            raise RuntimeError(f"Empty tokenization for {token_str!r}")
+        out[c.id] = ids[0]
+    return out
+
+
+def _find_unembed_path(model):
+    """Return (final_norm_module, lm_head_module). Tries common Gemma 3
+    paths for the final RMSNorm; lm_head via standard HF API."""
+    norm = None
+    for path in ("model.norm", "model.language_model.norm",
+                 "language_model.model.norm", "language_model.norm"):
+        obj = model
+        ok = True
+        for part in path.split("."):
+            if not hasattr(obj, part):
+                ok = False
+                break
+            obj = getattr(obj, part)
+        if ok:
+            norm = obj
+            break
+    if norm is None:
+        raise RuntimeError("Could not locate final norm module for logit lens")
+    lm_head = model.get_output_embeddings()
+    if lm_head is None:
+        lm_head = model.lm_head
+    return norm, lm_head
+
+
+@torch.no_grad()
+def _logit_lens_at_position(
+    prefill_hidden_states: tuple[torch.Tensor, ...],
+    position: int,
+    norm,
+    lm_head,
+    class_token_ids: dict[str, int],
+) -> tuple[torch.Tensor, list[str]]:
+    """Apply final-norm + lm_head to the residual at `position` for every
+    layer. Returns (n_layers, n_classes) tensor (CPU float32) of logits
+    over the supplied class_token_ids, plus the ordered class id list.
+    """
+    n_layers = len(prefill_hidden_states)
+    class_ids_list = list(class_token_ids.keys())
+    device = prefill_hidden_states[0].device
+    token_ids = torch.tensor(
+        [class_token_ids[c] for c in class_ids_list], device=device
+    )
+    out = torch.zeros((n_layers, len(class_ids_list)), dtype=torch.float32)
+    for L in range(n_layers):
+        residual = prefill_hidden_states[L][0, position, :]  # (hidden,)
+        normed = norm(residual.unsqueeze(0)).squeeze(0)  # (hidden,)
+        logits_full = lm_head(normed)  # (vocab,)
+        out[L] = logits_full[token_ids].detach().to("cpu", dtype=torch.float32)
+    return out, class_ids_list
+
+
 @torch.no_grad()
 def _generate_reveal_greedy(
-    handle: ModelHandle, model_inputs: dict[str, torch.Tensor], max_new_tokens: int = 48
-) -> str:
-    gen = handle.model.generate(
-        **model_inputs,
-        max_new_tokens=max_new_tokens,
-        pad_token_id=handle.tokenizer.eos_token_id,
-        do_sample=False,
-    )
+    handle: ModelHandle,
+    model_inputs: dict[str, torch.Tensor],
+    norm=None,
+    lm_head=None,
+    class_token_ids: dict[str, int] | None = None,
+    max_new_tokens: int = 48,
+) -> tuple[str, torch.Tensor | None, list[str] | None]:
+    """Greedy reveal + optional logit-lens at pre_reveal_gen across all layers."""
+    do_lens = norm is not None and lm_head is not None and class_token_ids
+    gen_kwargs = {
+        "max_new_tokens": max_new_tokens,
+        "pad_token_id": handle.tokenizer.eos_token_id,
+        "do_sample": False,
+    }
+    if do_lens:
+        gen_kwargs["return_dict_in_generate"] = True
+        gen_kwargs["output_hidden_states"] = True
+    gen = handle.model.generate(**model_inputs, **gen_kwargs)
+    if do_lens:
+        seq_len = model_inputs["input_ids"].shape[1]
+        new_tokens = gen.sequences[0, seq_len:]
+        raw = handle.tokenizer.decode(new_tokens, skip_special_tokens=True)
+        prefill_hs = gen.hidden_states[0]  # tuple per layer; each (1, seq_len, hidden)
+        pre_reveal_pos = seq_len - 1
+        lens_logits, class_ids_list = _logit_lens_at_position(
+            prefill_hs, pre_reveal_pos, norm, lm_head, class_token_ids
+        )
+        return raw, lens_logits, class_ids_list
     new_tokens = gen[0, model_inputs["input_ids"].shape[1]:]
-    return handle.tokenizer.decode(new_tokens, skip_special_tokens=True)
+    raw = handle.tokenizer.decode(new_tokens, skip_special_tokens=True)
+    return raw, None, None
 
 
 def main() -> int:
@@ -160,21 +250,34 @@ def main() -> int:
     }[args.dtype]
     handle = load_model(args.model, device=args.device, dtype=dtype)
 
+    norm = lm_head = class_token_ids = None
+    class_ids_list: list[str] = []
+    if args.logit_lens:
+        norm, lm_head = _find_unembed_path(handle.model)
+        class_token_ids = _bank_first_token_ids(handle, bank)
+        class_ids_list = list(class_token_ids.keys())
+        print(f"Logit-lens enabled. Tracking {len(class_ids_list)} bank classes.")
+
     # ---- Per-run baseline reveal via fresh replay (no flip), for sanity ----
     baselines: list[dict] = []
     t0 = time.time()
     for m in selected:
         inputs = _build_full_reveal_inputs(handle, m, list(m.turns), bank, args.prompt_variant)
-        raw = _generate_reveal_greedy(handle, inputs)
+        raw, lens, _ = _generate_reveal_greedy(
+            handle, inputs, norm=norm, lm_head=lm_head, class_token_ids=class_token_ids
+        )
         canon = parse_reveal_to_canonical(raw, bank)
-        baselines.append({
+        rec = {
             "run_id": m.run_id,
             "class": m.reveal_canonical_id,
             "original_pattern": [t.answer_bool for t in m.turns],
             "baseline_replay_canonical": canon,
             "baseline_replay_raw": raw.strip(),
             "ondisk_canonical": m.reveal_canonical_id,
-        })
+        }
+        if lens is not None:
+            rec["lens_logits"] = lens.tolist()  # (n_layers, n_classes)
+        baselines.append(rec)
     print(f"Baselines: {len(baselines)} runs in {time.time()-t0:.1f}s")
 
     # ---- Flipped-turn trials ----
@@ -194,12 +297,14 @@ def main() -> int:
                 })
                 continue
             inputs = _build_full_reveal_inputs(handle, m, modified_turns, bank, args.prompt_variant)
-            raw = _generate_reveal_greedy(handle, inputs)
+            raw, lens, _ = _generate_reveal_greedy(
+                handle, inputs, norm=norm, lm_head=lm_head, class_token_ids=class_token_ids
+            )
             canon = parse_reveal_to_canonical(raw, bank)
             orig_pattern = [t.answer_bool for t in m.turns]
             flipped_pattern = list(orig_pattern)
             flipped_pattern[n - 1] = not flipped_pattern[n - 1] if flipped_pattern[n - 1] is not None else None
-            trials.append({
+            rec = {
                 "run_id": m.run_id,
                 "class": m.reveal_canonical_id,
                 "flipped_turn": n,
@@ -209,7 +314,10 @@ def main() -> int:
                 "flipped_pattern": flipped_pattern,
                 "flipped_canonical": canon,
                 "flipped_raw": raw.strip(),
-            })
+            }
+            if lens is not None:
+                rec["lens_logits"] = lens.tolist()  # (n_layers, n_classes)
+            trials.append(rec)
             if i % 40 == 0 or i == total:
                 print(f"  [{i}/{total}] {m.reveal_canonical_id}/{m.run_id} "
                       f"flip_t{n}: {orig_ans}->{flipped_ans} -> {canon}", flush=True)
@@ -246,6 +354,9 @@ def main() -> int:
         "n_per_class": args.n_per_class,
         "turns_to_flip": turns_to_flip,
         "realized_classes": realized,
+        "logit_lens_enabled": args.logit_lens,
+        "logit_lens_class_order": class_ids_list if args.logit_lens else None,
+        "logit_lens_class_token_ids": class_token_ids if args.logit_lens else None,
         "baselines": baselines,
         "trials": trials,
         "summary": summary,
