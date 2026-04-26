@@ -1120,6 +1120,86 @@ pure-steering test. (b) is the escalation if (a) nulls.
 
 Held back until user weighs in.
 
+## 2026-04-26 — D-40: Yes/no text-level flip — improvisation hypothesis decisively confirmed
+
+Job `7266727` (gpu_h, 114s wall, exit 0) ran phase 2d (c-text): for
+each kept run T in the n=80 default scale-up (subsample 20/class), 4
+flipped trials (one per turn 1..4) where the chat context is rebuilt
+with that turn's yes/no answer text flipped (Yes <-> No). 320 flipped
+trials + 80 baseline replays. Output at
+`runs/m4_flip_yesno_text_12b_default_n80.json`. Detailed writeup at
+`docs/progress/M4-flip-yesno-text.md`.
+
+**Result — strong improvisation, decisively.**
+
+Kept-class rate matrix (rows=class, cols=flipped turn):
+
+| class    | T1 | T2 | T3 | T4 |
+|---|---:|---:|---:|---:|
+| cow      | 0%   | 35%  |  5% | 0%   |
+| dog      | 0%   | 10%  |  0% | 0%   |
+| elephant | 0%   | 40%  |  5% | 0%   |
+| horse    | 0%   | 100% | 10% | 0%   |
+
+- **Out-of-attractor rate 239/320 = 74.7%.** Flipping a single yes/no
+  answer routinely produces reveals OUTSIDE
+  `{cow, dog, elephant, horse}` — 13 of 20 bank classes appear in
+  flipped trials.
+- **Each turn induces a characteristic drift:** T1 -> wild/exotic
+  cluster (cobra, crocodile, frog, bee). T2 -> horse fallback (the
+  most-conservative cell). T3 -> dolphin in 79/80 trials. T4 -> large
+  mammal swap (gorilla 42, kangaroo 24).
+- **Per-turn shift rate:** T1 0/80 keep, T2 37/80, T3 4/80, T4 0/80.
+  T2 is the conservative outlier because the question that lands at
+  T2 across runs is more under-determined; the model defaults to the
+  prior (horse) on tiebreaks.
+
+Three baseline replay mismatches (`attempt_206`, `attempt_038`,
+`attempt_049`) are the same forward-pass nondeterminism family as
+`attempt_588`; ~4% noise floor that doesn't undermine the flip
+results.
+
+**Interpretation.** The model does not store a class commitment that
+survives dialogue tampering. The reveal class is causally a function
+of the visible yes/no answer history. Flip the history, the class
+follows. The 4-class greedy attractor at 12B is a *prior*, not a
+structural commitment — once the model is handed an answer pattern
+the priors don't dominate, it accesses the broader 20-class bank
+and confidently emits the most-consistent class.
+
+The "self-chosen 20 questions" task at 12B is mostly a hypothetical-
+completion task: model says "Ready" without committing, answers each
+question consistently with some plausible class it could be thinking
+of (the prior makes that the cow/dog/elephant/horse cluster), and
+at reveal time derives the most-consistent class from the
+accumulated answer pattern.
+
+**Decision consequence — three substantively different next steps:**
+
+1. **Phase 2e (residual-level constraint localization).** Capture
+   per-anchor residuals under both original and flipped dialogues
+   and compare divergence to localize where the dialogue evidence
+   enters the residual stream. Engineering: extend
+   `capture_positional_residuals.py` with `--flip-turn N`. Modest
+   refactor.
+2. **Scale comparison (Gemma 3 27B / 70B-class).** Re-run the same
+   flip-text experiment at scale. Tests whether improvisation is
+   scale-robust or whether larger models exhibit pre-commitment.
+   This is the central scale question the project flagged.
+3. **Pivot to M5 (SAE / transcoder feature case studies).** Now that
+   the M4 narrative is solid (improvisation > storage), the
+   mechanistic question of which features encode the yes/no
+   constraint accumulation and the class-derivation step may be
+   more efficiently studied at the SAE-feature level than the
+   raw-residual level.
+
+(2) and (3) are arguably better next steps than (1), because the
+M4 narrative is now solid and additional residual-level
+localization may have diminishing returns relative to
+SAE-features or scale comparison.
+
+NOT submitted autonomously. Held back for user research-judgment.
+
 
 
 

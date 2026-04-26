@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M4 — positional probing sweep done; **the model improvises rather than retrieving a commitment**. Class is at chance at end_ready, weak through turns 1-3, and crystallizes only at reveal time. No single commitment locus to patch — explains the comprehensive single-position null (D-35/D-36/D-37/D-38). Phase 2d (steering) needs a redesign in light of the positional picture; user input needed to choose direction.
+**Current milestone:** M4 — **improvisation hypothesis decisively confirmed** via yes/no text-level flip behavioral test (D-40). Out-of-attractor rate 74.7% (239/320 flipped trials produce classes outside `{cow, dog, elephant, horse}`); each flipped turn induces a *characteristic* class shift (T3-flip → dolphin 79/80 trials, T4-flip → gorilla/kangaroo, T1-flip → wild/exotic cluster). The model does not store a class commitment — the reveal is causally a function of the visible yes/no answer history. Three substantively different next steps (residual-level localization of constraint integration, scale comparison at 27B/70B, or pivot to M5 SAE features) — needs user research-judgment.
 **Last agent:** Claude
-**Last updated:** 2026-04-26 (M4 phase 2c-iii done on jobs `7265141` (capture, gpu_h ~50s) + `7266216` (analysis, cpu_8 ~25min, NameError on JSON write but numbers in log) + `7266529` (rerun for artifacts, in progress). **Striking result:** at end_ready (after the "Ready" token, where the prompt instructs the model to silently commit) LR LOO is **0.300, 1.20× chance — essentially nothing**. Class signal grows weakly through turns 1-3 (~1.5× chance), surges at turn-4 boundaries (2.2×), and reaches 0.925 (3.7×) at pre_reveal_gen — but that final spike is partially tautological since pre_reveal_gen's residual literally drives the next-token logits over the animal-name tokens. **Combined with the 0/2280 patching null, this implies the model doesn't store a class commitment in the residual stream — it re-derives the class at each step from accumulated dialogue (yes/no) evidence.** The M3 turn-4 LR LOO 0.79 was legible but not load-bearing; legibility ≠ causal path. See `docs/progress/M4-positional-probe.md` and DECISIONS D-39. **Phase 2d:** three substantively different steering experiments now make sense: (a) single-anchor centroid-diff steering at end_user_q4, (b) multi-position steering across turn boundaries, or (c) yes/no answer flipping at end_model_qN to directly test the improvisation hypothesis. NOT submitted autonomously — needs user research-judgment.)
+**Last updated:** 2026-04-26 (M4 phase 2d c-text done on job `7266727` — gpu_h, 114s wall, exit 0. Subsample 20/class × 4 turns flipped + 80 baseline replays = 400 forward passes. **Decisive scenario (i): strong improvisation confirmed.** Kept-class rate: T1 0%, T2 46%, T3 5%, T4 0%. T2 is the conservative cell because under-determined flipped constraints fall back to the horse prior; T1/T3/T4 are over-determined and produce confident new classes. The "self-chosen 20 questions" task at 12B is mostly a hypothetical-completion task: model says "Ready" without committing, answers questions consistent with some plausible class, and at reveal time derives the most-consistent class from the accumulated answers. See `docs/progress/M4-flip-yesno-text.md` and DECISIONS D-40. M4 narrative is solid; loop is paused for user research-judgment on next direction.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -106,55 +106,53 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step (M4 phase 2d) — needs user research-judgment.**
-Positional probe (D-39) revealed there's no single class commitment
-locus to patch. The class is at chance at end_ready, weak through
-mid-dialogue, and crystallizes only at reveal time. The model
-improvises rather than retrieves. This reframes phase 2d.
+**Next concrete step — needs user research-judgment.** D-40
+confirmed improvisation; the M4 narrative is solid. Three
+substantively different next moves:
 
-Three substantively different steering experiments now make sense:
+(1) **Phase 2e: residual-level constraint localization.** Where in
+    the residual stream does the dialogue-evidence-to-class mapping
+    happen? For each (run, target turn-to-flip), capture per-anchor
+    residuals under both original and flipped dialogues, compute
+    divergence (norm/cosine/class-projection) per anchor × layer, and
+    locate the first anchor where the flipped-answer signal enters.
+    Engineering: extend `capture_positional_residuals.py` with
+    `--flip-turn N`. Modest refactor (~60 lines + a simple analysis
+    script). Gives causal localization rather than just decodable
+    localization from D-39.
 
-(a) **Centroid-difference steering at end_user_q4** (LR 0.55, 2.2x
-    chance), L36-L48 band. For each (src, tgt) class pair, compute
-    `direction = centroid[src] - centroid[tgt]` from the saved
-    `_centroids.pt` file, add `alpha * direction` to tgt's residual
-    at end_user_q4 across L36-L48, sweep alpha over {0.5, 1, 2, 4, 8}.
-    Tests: can mid-strength positional class signal be amplified
-    through the model's re-derivation step? Cheapest pure-steering
-    test.
+(2) **Scale comparison (Gemma 3 27B / 70B-class).** Re-run the same
+    flip-text experiment at scale. Tests whether improvisation is
+    scale-robust or whether larger models exhibit pre-commitment.
+    The scale question the project flagged from the start. Engineering
+    is just rerunning existing scripts on a different model — a
+    new collection job (~hours), then phase 2c-iii probe + phase 2d
+    flip on that collection. The most ambitious and narrative-rich
+    follow-up.
 
-(b) **Multi-position centroid-diff steering** across all 4 turn-N
-    boundary anchors simultaneously (end_user_q1..q4 + end_model_q1..q4
-    + end_reveal_user). Bets that progressive-emergence requires
-    a coordinated multi-position injection to overpower the
-    re-derivation step. More moving parts; deferred unless (a) is
-    promising or null and we want to escalate.
+(3) **Pivot to M5 (SAE / transcoder feature case studies).** Now that
+    the M4 narrative is solid, the mechanistic question of which
+    features encode the yes/no constraint accumulation and the
+    class-derivation step may be more efficiently studied at the
+    SAE-feature level than the raw-residual level. This was the
+    original M5 plan and the improvisation finding makes it more
+    concrete (specific features to look for: per-question constraint
+    integration, accumulation across turns, class-derivation at
+    reveal).
 
-(c) **Yes/no answer flipping at end_model_qN.** Different intervention
-    type — not class steering but *constraint flipping*. For a
-    chosen turn N, replace tgt's residual at `end_model_qN` with the
-    residual from a run where that question received the *opposite*
-    yes/no answer (across same class or different class). Tests the
-    "regenerate from accumulated dialogue evidence" hypothesis
-    directly. If flipping one yes/no flips the reveal toward the new
-    answer pattern's most-consistent class, the improvisation
-    interpretation is confirmed and we have a positive causal result
-    on dialogue-evidence -> reveal mapping. Engineering: needs a
-    "find a run with flipped yes/no answer at turn N" search step
-    over the existing 600-run collection.
-
-Decision recommendation (mine): (c) probably has the highest
-scientific return per experiment, because confirming/refuting the
-improvisation story would frame the rest of the M4 work and the
-eventual blog post narrative. (a) is the cheapest pure-steering
-test if you want to confirm steering can do *anything* before doing
-(c). (b) is the multi-position escalation reserved for if (a) nulls.
+Recommendation (mine): (2) and (3) are arguably better than (1).
+(1) gives more mechanistic detail on the same 12B finding; (2) tests
+the most consequential scientific hypothesis (does scale change
+this); (3) starts the next milestone with concrete feature-level
+questions to pursue. (1) is the safest "more of the same" path.
 
 **Side investigations still pending (non-blocking):**
-- `attempt_588` baseline non-determinism across replays.
-- First-step logit-diff metric upgrade for dog.
-- Phase 2c-iii artifacts file landing (job 7266529 was running at last
-  check; the JSON + centroids should land within ~25 min of resubmit).
+- `attempt_588` (and 3 newly-flagged in D-40: `attempt_206`,
+  `attempt_038`, `attempt_049`) baseline non-determinism across
+  replays. ~4% noise floor.
+- Phase 2c-iii centroids file deferred (won't be needed unless we
+  pursue residual-level steering, which D-40 makes lower priority).
+  Bug fix for `counts` ref already pushed (`bada4fc`) for next time.
 
 **Methodological follow-up (deferred to whichever phase produces a
 positive signal):** the first-step logit-diff metric is unreliable for
