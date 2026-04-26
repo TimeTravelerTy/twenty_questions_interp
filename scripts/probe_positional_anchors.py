@@ -212,7 +212,7 @@ def main() -> int:
 
     report = {
         "in_dir": str(in_dir),
-        "n_runs_total_loaded": len(samples),
+        "n_runs_total_loaded": len(file_class),
         "n_runs_loo": n_runs,
         "n_per_class_loo": args.n_per_class,
         "layer_indices_probed": layer_indices,
