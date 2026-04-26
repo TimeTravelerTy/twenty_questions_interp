@@ -60,54 +60,98 @@ def main() -> int:
     if not pts:
         print(f"No capture files in {in_dir}", file=sys.stderr)
         return 1
-    print(f"Loading {len(pts)} capture files from {in_dir}")
+    print(f"Streaming over {len(pts)} capture files from {in_dir}")
 
-    # Load and verify all anchor schemas match.
-    samples: list[dict] = []
+    # Streaming pass: discover schema from first file, accumulate per-class
+    # centroid sums + counts, and stash residuals for runs in the LOO subsample.
+    # This keeps peak memory at: centroid_sums (~36 MB) + LOO_subsample stack
+    # (~720 MB for 80x12x49x3840 fp32) + transient one-file (~4.5 MB).
+    first = torch.load(pts[0], map_location="cpu", weights_only=False)
+    anchor_labels = first["anchor_labels"]
+    n_layers = first["residuals"].shape[1]
+    hidden = first["residuals"].shape[2]
+    n_anchors = len(anchor_labels)
+    del first
+
+    # Per-class running sums for centroid computation. Keys filled as we discover classes.
+    centroid_sums: dict[str, torch.Tensor] = {}
+    centroid_counts: dict[str, int] = {}
+
+    # First pass to enumerate classes + collect (run_id, class) → file path.
+    # We do this by reading each file twice (once for class metadata, once
+    # for residuals) to avoid holding 600 dicts in memory.
+    print("Pass 1: scanning class labels...")
+    file_class: list[tuple[Path, str, str]] = []
     for p in pts:
         d = torch.load(p, map_location="cpu", weights_only=False)
-        samples.append(d)
-    anchor_labels = samples[0]["anchor_labels"]
-    n_layers = samples[0]["residuals"].shape[1]
-    hidden = samples[0]["residuals"].shape[2]
-    for d in samples:
         if d["anchor_labels"] != anchor_labels:
             print(f"Anchor labels mismatch in {d['run_id']}: {d['anchor_labels']}", file=sys.stderr)
             return 2
-
-    classes_present = sorted({d["class"] for d in samples})
-    counts_full = {c: sum(1 for d in samples if d["class"] == c) for c in classes_present}
+        file_class.append((p, d["class"], d["run_id"]))
+        del d
+    classes_present = sorted({c for _, c, _ in file_class})
+    counts_full = {c: sum(1 for _, cc, _ in file_class if cc == c) for c in classes_present}
     print(f"Classes (all loaded): {classes_present}  counts: {counts_full}")
     if any(counts_full[c] < args.min_class_count for c in classes_present):
         print(f"WARNING: some class has < {args.min_class_count} runs; probing may be noisy")
-
     chance = 1.0 / len(classes_present)
 
-    # ---- Centroids over ALL samples, per class ----
-    # X_all_full[run_idx, anchor, layer, :] for centroid computation
-    X_all_full = torch.stack([d["residuals"] for d in samples], dim=0).numpy()
-    y_all = [d["class"] for d in samples]
-
-    # ---- Subsample for LR/NC LOO ----
+    # Decide LOO subsample membership now (deterministic: first K per class).
+    loo_indices_in_files: list[int] = []
     if args.n_per_class is not None:
-        # Take the first K runs of each class (sorted by run_id, deterministic)
         per_class_buckets: dict[str, list[int]] = {c: [] for c in classes_present}
-        # samples is already sorted by file path = sorted by run_id.
-        for i, d in enumerate(samples):
-            per_class_buckets[d["class"]].append(i)
-        kept_indices: list[int] = []
+        for i, (_, c, _) in enumerate(file_class):
+            per_class_buckets[c].append(i)
         for c in classes_present:
-            kept_indices.extend(per_class_buckets[c][: args.n_per_class])
-        kept_indices.sort()
-        X_full = X_all_full[kept_indices]
-        y = [y_all[i] for i in kept_indices]
-        counts_loo = {c: sum(1 for yy in y if yy == c) for c in classes_present}
-        print(f"LR/NC LOO subsample (n_per_class={args.n_per_class}): "
-              f"counts={counts_loo} total={len(y)}")
+            loo_indices_in_files.extend(per_class_buckets[c][: args.n_per_class])
+        loo_indices_in_files.sort()
     else:
-        X_full = X_all_full
-        y = y_all
-        counts_loo = counts_full
+        loo_indices_in_files = list(range(len(file_class)))
+    loo_set = set(loo_indices_in_files)
+    counts_loo = {c: sum(1 for i in loo_indices_in_files if file_class[i][1] == c) for c in classes_present}
+    print(f"LR/NC LOO subsample (n_per_class={args.n_per_class}): "
+          f"counts={counts_loo} total={len(loo_indices_in_files)}")
+
+    # Pass 2: stream residuals; accumulate per-class sums; collect LOO subsample.
+    print("Pass 2: streaming residuals (centroid sums + LOO subsample)...")
+    loo_residuals_list: list[torch.Tensor] = []
+    loo_y: list[str] = []
+    import time as _time
+    t0 = _time.time()
+    for i, (p, cls, _rid) in enumerate(file_class):
+        d = torch.load(p, map_location="cpu", weights_only=False)
+        r = d["residuals"]  # (n_anchors, n_layers, hidden) fp32
+        # Centroid running sum
+        if cls not in centroid_sums:
+            centroid_sums[cls] = torch.zeros((n_anchors, n_layers, hidden), dtype=torch.float32)
+            centroid_counts[cls] = 0
+        centroid_sums[cls] += r
+        centroid_counts[cls] += 1
+        if i in loo_set:
+            loo_residuals_list.append(r.clone())
+            loo_y.append(cls)
+        del d, r
+        if (i + 1) % 100 == 0:
+            print(f"  pass2 [{i+1}/{len(file_class)}] elapsed {_time.time()-t0:.1f}s", flush=True)
+    print(f"Pass 2 done in {_time.time()-t0:.1f}s")
+
+    # Build centroids tensor: (n_anchors, n_layers, n_classes, hidden)
+    centroids = torch.zeros((n_anchors, n_layers, len(classes_present), hidden), dtype=torch.float32)
+    for ci, cid in enumerate(classes_present):
+        if centroid_counts.get(cid, 0) == 0:
+            continue
+        centroids[:, :, ci, :] = centroid_sums[cid] / centroid_counts[cid]
+    # Free per-class sums
+    centroid_sums.clear()
+
+    # Stack LOO subsample: (n_loo, n_anchors, n_layers, hidden)
+    if loo_residuals_list:
+        X_full = torch.stack(loo_residuals_list, dim=0).numpy()
+        loo_residuals_list.clear()
+    else:
+        print("No LOO subsample collected", file=sys.stderr)
+        return 3
+    y = loo_y
 
     # ---- Layer subset for probing (centroids cover all layers regardless) ----
     if args.layers is not None:
@@ -117,23 +161,12 @@ def main() -> int:
     print(f"Probing {len(layer_indices)} layer(s): {layer_indices}")
 
     n_runs = X_full.shape[0]
-    n_anchors = X_full.shape[1]
     print(f"X shape (LOO subset): {X_full.shape}; n_runs={n_runs} n_anchors={n_anchors} "
           f"n_layers={n_layers} hidden={hidden} chance={chance:.3f}")
 
     # Per-(anchor, layer) probe-fit. Cells outside `layer_indices` are NaN.
     lr_grid = np.full((n_anchors, n_layers), np.nan)
     nc_grid = np.full((n_anchors, n_layers), np.nan)
-    centroids = torch.zeros((n_anchors, n_layers, len(classes_present), hidden), dtype=torch.float32)
-
-    # Centroids on ALL samples, all anchors, all layers.
-    y_all_arr = np.array(y_all)
-    for ci, cid in enumerate(classes_present):
-        mask = (y_all_arr == cid)
-        if mask.sum() == 0:
-            continue
-        # X_all_full has shape (n_all, n_anchors, n_layers, hidden); centroid (n_anchors, n_layers, hidden)
-        centroids[:, :, ci, :] = torch.from_numpy(X_all_full[mask].mean(axis=0))
 
     for ai, alabel in enumerate(anchor_labels):
         for L in layer_indices:
