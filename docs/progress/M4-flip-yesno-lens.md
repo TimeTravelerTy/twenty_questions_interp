@@ -153,6 +153,42 @@ attractor prior** lifting all 4 attractor classes above bank rare
 classes, NOT a run-specific commitment signal. Class-specific signal
 emerges only at L35-L40+, where dialogue integration has happened.
 
+### Per-cell rank check: orig vs other attractors
+
+User raised one more clean test: at each layer, where does orig rank
+among all 20 bank classes, and how does that rank compare to the
+other 3 attractor classes? If orig is ranked above the other
+attractors at mid-layers, that's run-specific commitment-like signal.
+If orig is mixed in with the other attractors, generic-prior story.
+
+Per-cell rank at L30 (own-class in parens; horse and salmon as
+external references):
+
+| cell | orig | dog | cow | elephant | horse | salmon |
+|---|---:|---:|---:|---:|---:|---:|
+| cow/T1      | cow=#10  | #5 | (#10) | #7 | **#1** | #16 |
+| dog/T1      | dog=#5   | (#5) | #11 | #7 | **#1** | #16 |
+| elephant/T1 | ele=#5   | #6 | #11 | (#5) | **#1** | #16 |
+| horse/T1    | hor=**#1** | #6 | #11 | #5 | (#1) | #16 |
+
+Horse is **rank #1 at L30 in every cell**, regardless of which class
+the run is. When "horse runs have horse at rank #1" it's not
+commitment to horse — horse is always near the top at L30 in 12B
+Gemma at this prompt position, the strongest single prior. In cow
+runs at L30, horse is also at #1, beating cow.
+
+So at L25-L30 the ranking is generic-attractor-prior driven, not
+run-specific. The run's own class is just "one of the attractors,"
+sometimes ranked higher and sometimes lower than its peer attractors
+depending on the dialogue evidence integrated so far — never
+specifically elevated above peers. There is no layer where the model
+"remembers" the run's intended class better than it remembers the
+other attractors.
+
+Salmon (true neutral) is consistently at #13-#16, confirming the lens
+is doing meaningful class-discrimination at L25+ — the rank gap
+between attractor and rare classes is large.
+
 ### Per-cell flip[orig] vs flip[new] crossover
 
 For each (orig, flipped_turn) cell, picked the dominant new class
