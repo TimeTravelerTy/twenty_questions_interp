@@ -129,6 +129,59 @@ is no earlier "commitment" stage that gets overridden — the model's
 preference is constructed late in the network from the (current)
 dialogue evidence, full stop.
 
+## Addendum: cross-class baseline + per-cell crossover pattern
+
+User flagged that the original `base[orig]` vs `flip[orig]` comparison
+was the wrong baseline (pattern (ii) doesn't actually predict
+flip[orig] > base[orig]; it predicts equality at the commitment layer
+and divergence late). Two cleaner checks resolve the methodology:
+
+### Cross-class baseline: `logit[C] in C-runs vs in non-C-runs` (under no-flip)
+
+| layer | cow | dog | elephant | horse |
+|---|---:|---:|---:|---:|
+| L25 | +0.00 | -0.01 | +0.01 | -0.02 |
+| L30 | +0.14 | +0.46 | +0.46 | +0.16 |
+| L35 | +0.54 | +2.02 | +1.31 | +1.46 |
+| L40 | +3.27 | +5.52 | +6.60 | +2.03 |
+
+At L25-L30 (where the lens first becomes class-readable), the
+own-class elevation in own-runs is essentially zero — the mid-layer
+elevation we saw under flipped dialogue (1-7 logits above
+truly-neutral classes like salmon/eagle/owl) was the **generic
+attractor prior** lifting all 4 attractor classes above bank rare
+classes, NOT a run-specific commitment signal. Class-specific signal
+emerges only at L35-L40+, where dialogue integration has happened.
+
+### Per-cell flip[orig] vs flip[new] crossover
+
+For each (orig, flipped_turn) cell, picked the dominant new class
+and tracked which logit wins at each layer in the same flipped
+context. Two clusters:
+
+- **Early-crossover (L20-L22):** dialogue-evidence cleanly picks new
+  class throughout the lens-readable range. cow/T2, cow/T3,
+  elephant/T3, elephant/T4, horse/T3.
+- **Late-crossover (L28-L40):** orig wins mid-network (L25-L34)
+  before new overtakes. Mostly T1 flips: cow/T1 (L37), dog/T1 (L32),
+  elephant/T1 (L40), horse/T1 (L36). These are cells where 3 of 4
+  unflipped answers support orig, so the mid-network "vote" favors
+  the original until the flipped answer's evidence integrates fully
+  via late attention/MLP.
+
+Combined with the cross-class baseline, the "orig wins mid-network"
+effect in late-crossover cells is explained by **3 unflipped answers
+vs 1 flipped answer in the integration tally**, not by a stored
+class-specific commitment — when "cow wins L30" in cow/T1 trials,
+it's because cow/dog/elephant/horse are ALL elevated above bank
+rare classes by the generic attractor prior, and the unflipped 3
+answers nudge the integration toward the cluster. By L35-L40 the
+flipped answer's specific evidence wins out.
+
+This sharpens the D-41 conclusion: pattern (i) pure improvisation
+is the right reading. The mid-layer "consideration" of attractor
+classes is generic, not run-specific. The M4 narrative is robust.
+
 ## What this means for D-40
 
 The D-40 conclusion holds robustly. The methodological worry that
