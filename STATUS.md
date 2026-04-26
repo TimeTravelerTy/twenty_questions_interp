@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M4 — **improvisation hypothesis decisively confirmed** via yes/no text-level flip behavioral test (D-40). Out-of-attractor rate 74.7% (239/320 flipped trials produce classes outside `{cow, dog, elephant, horse}`); each flipped turn induces a *characteristic* class shift (T3-flip → dolphin 79/80 trials, T4-flip → gorilla/kangaroo, T1-flip → wild/exotic cluster). The model does not store a class commitment — the reveal is causally a function of the visible yes/no answer history. Three substantively different next steps (residual-level localization of constraint integration, scale comparison at 27B/70B, or pivot to M5 SAE features) — needs user research-judgment.
+**Current milestone:** M4 — **improvisation hypothesis decisively confirmed AND suppressed-pre-commitment ruled out via logit-lens (D-40 + D-41)**. The 12B model's class-derivation is a late-network construction (L30-L48) drawing from dialogue evidence; no mid-network "commitment bump" exists at any layer. The 12B M4 narrative is methodologically clean. Next move: scale comparison at Gemma 3 27B (and possibly a 70B-class model) — same pipeline, model swap.
 **Last agent:** Claude
-**Last updated:** 2026-04-26 (M4 phase 2d c-text done on job `7266727` — gpu_h, 114s wall, exit 0. Subsample 20/class × 4 turns flipped + 80 baseline replays = 400 forward passes. **Decisive scenario (i): strong improvisation confirmed.** Kept-class rate: T1 0%, T2 46%, T3 5%, T4 0%. T2 is the conservative cell because under-determined flipped constraints fall back to the horse prior; T1/T3/T4 are over-determined and produce confident new classes. The "self-chosen 20 questions" task at 12B is mostly a hypothetical-completion task: model says "Ready" without committing, answers questions consistent with some plausible class, and at reveal time derives the most-consistent class from the accumulated answers. See `docs/progress/M4-flip-yesno-text.md` and DECISIONS D-40. M4 narrative is solid; loop is paused for user research-judgment on next direction.)
+**Last updated:** 2026-04-26 (M4 phase 2d c-text + logit-lens done on job `7267006` — gpu_h, 155s wall, exit 0. Per-trial 49-layer × 20-class lens matrix at pre_reveal_gen captured for all 320 flipped trials + 80 baselines. **Pattern (iii)/(i) hybrid; pattern (ii) decisively ruled out.** `flip[orig]` is NEVER ELEVATED above `base[orig]` at any layer; suppression starts at L30-L37 and grows to 17-42 logits at L48 in over-determined cells (T1/T3/T4) and 3-10 logits in under-determined T2. Special case horse/T2 ~0 effect at every layer (kept-class 100%). Conclusion: the model's apparent commitment in unflipped baselines is itself a late-network construction from dialogue evidence; no earlier stored commitment that gets overridden. See `docs/progress/M4-flip-yesno-lens.md` and DECISIONS D-41. The 12B M4 narrative is now solid. **Next:** Gemma 3 27B self-chosen collection then re-run the same probe + flip-text-with-lens pipeline. Held for user to confirm 27B kickoff.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -106,45 +106,43 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step — needs user research-judgment.** D-40
-confirmed improvisation; the M4 narrative is solid. Three
-substantively different next moves:
+**Next concrete step — Gemma 3 27B scale comparison.** The 12B M4
+narrative is methodologically clean (D-40 + D-41); user agreed (2)
+scale comparison precedes M5 SAE work. Pipeline:
 
-(1) **Phase 2e: residual-level constraint localization.** Where in
-    the residual stream does the dialogue-evidence-to-class mapping
-    happen? For each (run, target turn-to-flip), capture per-anchor
-    residuals under both original and flipped dialogues, compute
-    divergence (norm/cosine/class-projection) per anchor × layer, and
-    locate the first anchor where the flipped-answer signal enters.
-    Engineering: extend `capture_positional_residuals.py` with
-    `--flip-turn N`. Modest refactor (~60 lines + a simple analysis
-    script). Gives causal localization rather than just decodable
-    localization from D-39.
+1. **Submit a self-chosen 20-bank collection on `gemma-3-27b-it`.**
+   Need to verify HF gating + storage budget on TSUBAME first. Same
+   default-prompt 4-question panel as 12B for direct comparability.
+   Quota target: 20 runs/class for the realized attractor classes.
+   At 12B the realized set was `{cow, dog, elephant, horse}`; 27B may
+   shift the attractor (D-34's `less_obvious` variant already showed
+   prompt-sensitive attractor at 12B). Run with `--stop-when-n-classes-
+   hit-quota` similar to the 12B scale-up. ~hours walltime since 27B
+   is ~2.25× slower than 12B per token.
+2. **Re-run capture_positional_residuals.py** on the 27B collection.
+3. **Re-run probe_positional_anchors.py** with `--n-per-class 20`.
+4. **Re-run flip_yesno_text.py with --logit-lens** on 27B.
 
-(2) **Scale comparison (Gemma 3 27B / 70B-class).** Re-run the same
-    flip-text experiment at scale. Tests whether improvisation is
-    scale-robust or whether larger models exhibit pre-commitment.
-    The scale question the project flagged from the start. Engineering
-    is just rerunning existing scripts on a different model — a
-    new collection job (~hours), then phase 2c-iii probe + phase 2d
-    flip on that collection. The most ambitious and narrative-rich
-    follow-up.
+The scale-axis questions (per project_scale_question memory):
+- Does `end_ready` LR LOO climb above chance at 27B? -> Y means scale
+  induces residual-stream pre-commitment.
+- Do flip-text out-of-attractor rates decrease (more pre-commitment),
+  increase (more confident improvisation), or stay equal? -> Decrease
+  + above-chance end_ready would give us the strong "scale induces
+  commitment" claim.
+- Does lens-trajectory show a mid-network commitment bump at 27B
+  even if final-layer behavior is dialogue-respecting? -> Y would
+  surface a "stored commitment that scales overrides via late
+  layers" picture, structurally different from 12B's pure late-
+  integration.
 
-(3) **Pivot to M5 (SAE / transcoder feature case studies).** Now that
-    the M4 narrative is solid, the mechanistic question of which
-    features encode the yes/no constraint accumulation and the
-    class-derivation step may be more efficiently studied at the
-    SAE-feature level than the raw-residual level. This was the
-    original M5 plan and the improvisation finding makes it more
-    concrete (specific features to look for: per-question constraint
-    integration, accumulation across turns, class-derivation at
-    reveal).
+Each outcome is publishable. Same pipeline; only the model name
+changes.
 
-Recommendation (mine): (2) and (3) are arguably better than (1).
-(1) gives more mechanistic detail on the same 12B finding; (2) tests
-the most consequential scientific hypothesis (does scale change
-this); (3) starts the next milestone with concrete feature-level
-questions to pursue. (1) is the safest "more of the same" path.
+**Side investigations still pending (non-blocking):**
+- `attempt_588`/`206`/`038`/`049` baseline non-determinism (~4%).
+- Phase 2c-iii centroids file (deferred indefinitely; only needed
+  for residual-level steering which D-40 made lower priority).
 
 **Side investigations still pending (non-blocking):**
 - `attempt_588` (and 3 newly-flagged in D-40: `attempt_206`,

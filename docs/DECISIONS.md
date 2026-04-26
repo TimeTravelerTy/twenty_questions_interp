@@ -1200,6 +1200,88 @@ SAE-features or scale comparison.
 
 NOT submitted autonomously. Held back for user research-judgment.
 
+## 2026-04-26 — D-41: Logit-lens analysis confirms improvisation; no suppressed pre-commitment signature
+
+User raised a methodological worry on D-40: flip-text-with-argmax
+can't distinguish "no commitment" from "committed-but-overridable"
+because in both cases the final argmax respects the dialogue. They
+proposed adding logit-lens at intermediate layers to catch the
+"suppressed pre-commitment" pattern (orig class elevated mid-network
+then suppressed late by negative attention heads, etc.).
+
+Job `7267006` (gpu_h, 155s wall, exit 0) re-ran the flip-text
+experiment with `--logit-lens` enabled: per-trial 49-layer x 20-class
+matrix of logit-lens readings at `pre_reveal_gen` (final RMSNorm +
+`lm_head` applied to each layer's residual at the prefill's last
+position, indexed by every bank-class first-token).
+
+Three patterns we were watching for:
+- (i) Pure improvisation: `flip[orig]` tracks `base[orig]` everywhere.
+- (ii) Suppressed pre-commitment: `flip[orig]` exceeds `base[orig]`
+  at some mid-network layer, then decays late.
+- (iii) Concurrent consideration: orig and new both rise late; new
+  overtakes orig in final layers.
+
+**Result: pattern (iii)/(i) hybrid; pattern (ii) decisively ruled out.**
+
+Across all 320 trials × 49 layers:
+- L0-L25: `flip[orig]` ~ `base[orig]` (lens uninformative anyway).
+- L30-L37: divergence kicks in (first layer where flip drops 5+ below
+  base is L35-L39 across cells).
+- L40-L48: full divergence; L48 drops of 17-42 logits in over-
+  determined cells (T1/T3/T4), 3-10 in under-determined T2.
+
+**Critical:** `flip[orig]` is NEVER ELEVATED above `base[orig]` at any
+layer in any cell. The "commitment bump" pattern (ii) predicts and we
+do not observe.
+
+L48 suppression magnitude tracks dialogue informativeness:
+
+| | T1 | T2 | T3 | T4 |
+|---|---:|---:|---:|---:|
+| cow      | -30.0 |  -9.6 | -26.9 | -41.0 |
+| dog      | -27.5 | -10.1 | -23.9 | -29.7 |
+| elephant | -36.9 |  -8.5 | -17.0 | -36.4 |
+| horse    | -29.7 |  -3.1 | -22.3 | -42.4 |
+
+Special case `horse/T2` (-3.1, ~0 effect at every layer) is consistent
+with the kept-class rate of 100% from D-40.
+
+**Interpretation.** The model's class-derivation at `pre_reveal_gen` is
+a **late-network construction (L30-L48)** drawing from dialogue
+evidence at earlier token positions via attention. There is no
+earlier commitment that gets overridden — the model's preference
+in the unflipped baseline is itself built by the same late-network
+mechanism, just with different dialogue evidence to integrate.
+
+D-40 conclusion holds robustly. Methodological worry resolved.
+
+**Decision — proceed to scale comparison.** 12B M4 narrative is now
+methodologically clean:
+
+- No commitment in residual stream (D-35..D-39).
+- Reveal causally driven by dialogue evidence (D-40 behavioral).
+- Mechanism is late-network integration, not stored-retrieval (D-41
+  lens trajectory).
+
+Next experiment: same sequence (positional probe + flip-text-with-lens)
+at Gemma 3 27B. Engineering pipeline is now reusable; only the model
+name + collection step change. Need to:
+1. Submit a self-chosen 20-bank n>=80 collection on `gemma-3-27b-it`
+   (~hours; large model = longer per-attempt forward pass).
+2. Re-run capture_positional_residuals.py + probe_positional_anchors.py
+   on the 27B collection.
+3. Re-run flip_yesno_text.py with --logit-lens on the 27B collection.
+
+Open scale-axis question (per project_scale_question memory):
+- Does end_ready LR LOO climb above chance at 27B?
+- Do flip-text out-of-attractor rates decrease (more pre-commitment),
+  increase (more confident improvisation), or stay roughly equal?
+- Does lens-trajectory show a mid-network commitment bump at 27B?
+
+Held for user to confirm: kick off 27B self-chosen collection?
+
+
 
 
 
