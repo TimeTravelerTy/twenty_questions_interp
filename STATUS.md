@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M4 — single-position pre-answer patching is comprehensively null across phases 1/2a/2b/2c-i (0 / 2280 flips-to-src on stable targets across {L29, L27-L48, L1-L48} × {turn 1, 2, 3, 4}). The class-decodable signal at L29-L48 (M3 turn-4 LR LOO 0.79) is legible but decisively off the reveal-token causal path. Phase 2c-ii (position-band patch) needs a moderate refactor + a research-judgment call from the user before implementation.
+**Current milestone:** M4 — positional probing sweep done; **the model improvises rather than retrieving a commitment**. Class is at chance at end_ready, weak through turns 1-3, and crystallizes only at reveal time. No single commitment locus to patch — explains the comprehensive single-position null (D-35/D-36/D-37/D-38). Phase 2d (steering) needs a redesign in light of the positional picture; user input needed to choose direction.
 **Last agent:** Claude
-**Last updated:** 2026-04-26 (M4 phase 2c-i done on job `7260593`: per-turn pre-answer all-layer patch sweep across turns 1, 2, 3 — three 400-trial experiments in one bundled job. **All three turns null on stable targets.** Across the full 1200 new trials, 1 lone "flip-to-src" at turn 3 was traced to attempt_581's 15% perturbation-fallback to horse (the same prior-attractor leakage seen in phase 2b), not a real causal effect. Combined with phases 1/2a/2b: 0 / 2280 genuine flips on the 19 stable targets across every single-position patch tested. See `docs/progress/M4-patch-turnsweep-null.md` and DECISIONS D-38. **Phase 2c-ii:** position-band patch with on-the-fly src forward-pass capture is the next structural test. NOT submitted autonomously — it's a moderate script refactor and the choice between "K=5 trailing scaffolding band at turn 4", "shift to turn-0 Ready output position", or "positional probing sweep first to localize where class signal enters" is a research-judgment call worth user input.)
+**Last updated:** 2026-04-26 (M4 phase 2c-iii done on jobs `7265141` (capture, gpu_h ~50s) + `7266216` (analysis, cpu_8 ~25min, NameError on JSON write but numbers in log) + `7266529` (rerun for artifacts, in progress). **Striking result:** at end_ready (after the "Ready" token, where the prompt instructs the model to silently commit) LR LOO is **0.300, 1.20× chance — essentially nothing**. Class signal grows weakly through turns 1-3 (~1.5× chance), surges at turn-4 boundaries (2.2×), and reaches 0.925 (3.7×) at pre_reveal_gen — but that final spike is partially tautological since pre_reveal_gen's residual literally drives the next-token logits over the animal-name tokens. **Combined with the 0/2280 patching null, this implies the model doesn't store a class commitment in the residual stream — it re-derives the class at each step from accumulated dialogue (yes/no) evidence.** The M3 turn-4 LR LOO 0.79 was legible but not load-bearing; legibility ≠ causal path. See `docs/progress/M4-positional-probe.md` and DECISIONS D-39. **Phase 2d:** three substantively different steering experiments now make sense: (a) single-anchor centroid-diff steering at end_user_q4, (b) multi-position steering across turn boundaries, or (c) yes/no answer flipping at end_model_qN to directly test the improvisation hypothesis. NOT submitted autonomously — needs user research-judgment.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -106,54 +106,55 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step (M4 phase 2c-ii) — needs user input first.**
-Phase 2c-i closed the "single-position pre-answer at any turn" branch
-with 0 / 2280 genuine flips on stable targets. The natural next test
-is a **position-band patch**: replace src's residuals across a window
-of positions in tgt, all layers, see if reveals flip. Three possible
-shapes for that experiment, each with different scope/cost:
+**Next concrete step (M4 phase 2d) — needs user research-judgment.**
+Positional probe (D-39) revealed there's no single class commitment
+locus to patch. The class is at chance at end_ready, weak through
+mid-dialogue, and crystallizes only at reveal time. The model
+improvises rather than retrieves. This reframes phase 2d.
 
-(a) **K=5 trailing-scaffolding band at turn 4 pre-answer.** Patch the
-    last 5 prefill tokens (`<end_of_turn>\n<start_of_turn>model\n`),
-    which are token-aligned across runs without per-run alignment
-    work. Cheapest variant. Tests whether the class commitment is
-    spread across the immediate scaffolding band rather than living
-    on a single token. Engineering: add a "live src capture" path
-    (forward-pass src up to qN-preanswer with `output_hidden_states=True`
-    and grab a position window) plus a `--position-window K` CLI.
+Three substantively different steering experiments now make sense:
 
-(b) **Shift the patch site to turn-0 Ready output position.** In the
-    self-chosen condition the model first emits `Ready` after
-    silently picking an animal — plausibly the class-commitment
-    write site. Single-position patch at the Ready token, all layers.
-    Engineering: add a context builder that ends at Ready (instead of
-    a turn-N pre-answer) plus the live-capture path. Different
-    structural hypothesis from (a): "earlier in the dialogue" rather
-    than "wider on the same position."
+(a) **Centroid-difference steering at end_user_q4** (LR 0.55, 2.2x
+    chance), L36-L48 band. For each (src, tgt) class pair, compute
+    `direction = centroid[src] - centroid[tgt]` from the saved
+    `_centroids.pt` file, add `alpha * direction` to tgt's residual
+    at end_user_q4 across L36-L48, sweep alpha over {0.5, 1, 2, 4, 8}.
+    Tests: can mid-strength positional class signal be amplified
+    through the model's re-derivation step? Cheapest pure-steering
+    test.
 
-(c) **Positional probing sweep first.** Before another patching
-    experiment, run `decode_turns.py` (or a positional variant) to
-    map *where* in the residual stream the class signal first
-    becomes decodable. Currently we only have probe scores at
-    pre-answer positions of each turn; extending to all positions of
-    the prefix would tell us the earliest position where LR LOO is
-    above chance, which would inform which position to patch.
+(b) **Multi-position centroid-diff steering** across all 4 turn-N
+    boundary anchors simultaneously (end_user_q1..q4 + end_model_q1..q4
+    + end_reveal_user). Bets that progressive-emergence requires
+    a coordinated multi-position injection to overpower the
+    re-derivation step. More moving parts; deferred unless (a) is
+    promising or null and we want to escalate.
 
-Each is the right next test under a different working hypothesis.
-(a) bets on a small coordinated multi-token write at the turn-4
-boundary. (b) bets on early commitment at the Ready token. (c) bets
-that we should localize-then-patch rather than guess-then-patch.
+(c) **Yes/no answer flipping at end_model_qN.** Different intervention
+    type — not class steering but *constraint flipping*. For a
+    chosen turn N, replace tgt's residual at `end_model_qN` with the
+    residual from a run where that question received the *opposite*
+    yes/no answer (across same class or different class). Tests the
+    "regenerate from accumulated dialogue evidence" hypothesis
+    directly. If flipping one yes/no flips the reveal toward the new
+    answer pattern's most-consistent class, the improvisation
+    interpretation is confirmed and we have a positive causal result
+    on dialogue-evidence -> reveal mapping. Engineering: needs a
+    "find a run with flipped yes/no answer at turn N" search step
+    over the existing 600-run collection.
 
-Pausing autonomous execution until the user picks a direction.
+Decision recommendation (mine): (c) probably has the highest
+scientific return per experiment, because confirming/refuting the
+improvisation story would frame the rest of the M4 work and the
+eventual blog post narrative. (a) is the cheapest pure-steering
+test if you want to confirm steering can do *anything* before doing
+(c). (b) is the multi-position escalation reserved for if (a) nulls.
 
 **Side investigations still pending (non-blocking):**
-- `attempt_588` baseline non-determinism is reproducible across all
-  four turn replays — not transient, but a persistent divergence from
-  the original streaming-collection forward pass. Worth a short
-  investigation if future patching depends on horse trial reliability.
-- First-step logit-diff metric is unreliable for dog (reveals don't
-  begin with the ` Dog` token). Upgrade to multi-step scan when any
-  positive signal emerges and metric sensitivity becomes load-bearing.
+- `attempt_588` baseline non-determinism across replays.
+- First-step logit-diff metric upgrade for dog.
+- Phase 2c-iii artifacts file landing (job 7266529 was running at last
+  check; the JSON + centroids should land within ~25 min of resubmit).
 
 **Methodological follow-up (deferred to whichever phase produces a
 positive signal):** the first-step logit-diff metric is unreliable for

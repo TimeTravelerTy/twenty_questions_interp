@@ -1014,5 +1014,113 @@ but it tips to `horse` ~15% of the time under heavy residual
 disruption. Closer to the cow/horse decision boundary than its 4
 cow-class peers in the model's representation space.
 
+## 2026-04-26 — D-39: Positional probe sweep — there is no single class commitment locus; class emerges progressively from accumulated dialogue evidence
+
+Job `7266216` (cpu_8, ~25 min) ran phase 2c-iii: a 4-class LR LOO + NC
+LOO sweep across 12 chat-template-aligned anchor positions × all 49
+layers, on residuals captured from the n=80 default scale-up (job
+`7265141`). Job `7266529` re-ran to write the JSON + centroids
+artifacts after a NameError-on-final-serialization bug in the first
+analysis run was fixed (`samples` -> `file_class`). Numbers below are
+from the 7266216 log; artifacts come from 7266529. Detailed writeup at
+`docs/progress/M4-positional-probe.md`.
+
+**Per-anchor LR LOO peaks (chance = 0.25):**
+
+| anchor | LR peak | LR/chance | peak layer |
+|---|---:|---:|---:|
+| end_user_prompt    | 0.325 | 1.30x | L8 |
+| end_ready          | 0.300 | 1.20x | L1 |
+| end_user_q1        | 0.338 | 1.35x | L27 |
+| end_model_q1       | 0.388 | 1.55x | L13 |
+| end_user_q2        | 0.388 | 1.55x | L39 |
+| end_model_q2       | 0.400 | 1.60x | L40 |
+| end_user_q3        | 0.375 | 1.50x | L26 |
+| end_model_q3       | 0.388 | 1.55x | L45 |
+| end_user_q4        | 0.550 | 2.20x | L36 |
+| end_model_q4       | 0.550 | 2.20x | L48 |
+| end_reveal_user    | 0.537 | 2.15x | L39 |
+| **pre_reveal_gen** | **0.925** | **3.70x** | L45 |
+
+**Three-stage picture:**
+
+1. **Pre-dialogue (end_user_prompt, end_ready):** LR <= 1.3x chance.
+   *The model has not committed at the Ready position.* Most surprising
+   finding: in the self-chosen condition the model emits `Ready` after
+   being told to silently choose, but at that token the class is
+   essentially at chance.
+2. **Mid-dialogue (turns 1-3):** LR ~1.5x chance. Weak but
+   above-chance, no monotone climb.
+3. **End-game:** LR jumps to 2.2x at turn-4 boundaries, 3.7x at
+   pre_reveal_gen. The 3.7x is *partially tautological* —
+   pre_reveal_gen's residual literally drives the next-token logits
+   over the four animal-name tokens, so high decodability there
+   reflects "this is where the next-token prediction is computed,"
+   not "this is where the commitment lives."
+
+**M3's turn-4 pre-answer LR LOO 0.79 reconciles cleanly:** that
+position sits 4 tokens after `end_user_q4` (the `\n` after
+`<start_of_turn>model`), in the per-turn scaffolding gap between my
+end_user_q4 (LR 0.55) and end_model_q4 (LR 0.55) anchors. Per-turn
+pre-answer is a local maximum within each turn's scaffolding, but the
+global pattern is "signal grows with turn index, peaks at reveal
+time."
+
+**Interpretation — the model is improvising, not retrieving.**
+Combined with the comprehensive single-position patching null
+(D-35/D-36/D-37/D-38: 0/2280 flips), the picture coheres:
+
+- *No single class-commitment locus exists.* The Ready response is a
+  placeholder, not a residual-stream secret-storage event.
+- *Class is progressively constructed from accumulated yes/no
+  constraints.* The residual becomes incrementally more
+  class-informative as constraints accumulate; downstream computation
+  re-derives the most-consistent class from visible history rather
+  than reading off a stored variable.
+- *Patching nulls now have a mechanistic explanation.* Replacing one
+  position's residual doesn't change the reveal because the model
+  recomputes the class from accumulated dialogue evidence at each
+  subsequent step. A patched residual at, say, end_user_q4 is
+  re-summarized at pre_reveal_gen from the (unmodified) yes/no answer
+  history, and that re-derivation produces the original target class
+  regardless.
+- *The M3 turn-4 LR LOO 0.79 was real but not load-bearing.* The class
+  is *legible* at turn-4 pre-answer; legibility != causal path. The
+  model doesn't *consult* a stored variable at that position; it
+  derives the answer at the moment of needing it.
+
+This dissociation pattern matches Heimersheim & Nanda 2024 and
+"Causality != Decodability" arXiv 2510.09794. What's new and
+load-bearing here is the *positional* picture — the lack of a
+Ready-position commitment, and the progressive emergence across turns.
+
+**Decision — phase 2d (steering) needs a redesign, NOT submitted
+autonomously.** Three substantively different next moves:
+
+(a) Single-anchor centroid-difference steering at end_user_q4 (LR
+    0.55), L36-L48 band, alpha sweep {0.5, 1, 2, 4, 8}. Cheapest pure
+    steering test. Bets that mid-strength positional class signal
+    can be amplified through the model's re-derivation step.
+(b) Multi-position centroid-difference steering across all 4 turn
+    boundaries simultaneously. Bets that progressive-emergence requires
+    a coordinated multi-position injection to overpower the
+    re-derivation.
+(c) **Yes/no answer flipping** at end_model_qN. Replaces a yes/no
+    residual with the residual that would have been there had the
+    answer been the opposite. Different intervention type — not class
+    steering but *constraint flipping*. Directly tests the
+    "regenerate from accumulated evidence" hypothesis. If flipping
+    one yes/no flips the reveal consistent with the new answer
+    pattern, the improvisation interpretation is confirmed.
+
+(c) probably has the highest scientific return per experiment because
+confirming/refuting the improvisation story would frame the rest of
+the M4 work and the eventual blog post narrative. (a) is the cheapest
+pure-steering test. (b) is the escalation if (a) nulls.
+
+Held back until user weighs in.
+
+
+
 
 
