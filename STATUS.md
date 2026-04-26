@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** M4 — phases 1/2a/2b sweep across {L29, L27-L48, L1-L48} layer scope at the turn-4 pre-answer position all null on both metrics. The pre-answer position is decisively not the reveal-token bottleneck. Phase 2c-i sweeps across earlier turns' pre-answer positions (free, uses existing saved activations).
+**Current milestone:** M4 — single-position pre-answer patching is comprehensively null across phases 1/2a/2b/2c-i (0 / 2280 flips-to-src on stable targets across {L29, L27-L48, L1-L48} × {turn 1, 2, 3, 4}). The class-decodable signal at L29-L48 (M3 turn-4 LR LOO 0.79) is legible but decisively off the reveal-token causal path. Phase 2c-ii (position-band patch) needs a moderate refactor + a research-judgment call from the user before implementation.
 **Last agent:** Claude
-**Last updated:** 2026-04-25 (M4 phase 2b done in ~2min walltime on job `7260501`: patched all 48 decoder layers simultaneously at the turn-4 pre-answer position. **Null on argmax (every off-diagonal cell 0% flip), near-null on logit-diff** (deltas ±0.46 range, mostly *negative* on off-diagonals — patches push *away* from src). Cow→cow self-patch drops to 92% (horse leakage from prior fallback). Conclusion across phases 1/2a/2b: turn-4 pre-answer position is not the reveal-token bottleneck regardless of layer scope. The M3 turn-4 LR LOO 0.79 signal is *legible* but *off the causal path*. See `docs/progress/M4-patch-turn4-alllayers-null.md` and DECISIONS D-37. **Phase 2c-i:** cheap per-turn sweep using existing `turn_01..turn_04_activations.pt` files; `patch_turn4.py` to be extended with `--turn N` flag, then one bundled job runs all-layer patches at turn 1, 2, 3 pre-answer positions in sequence.)
+**Last updated:** 2026-04-26 (M4 phase 2c-i done on job `7260593`: per-turn pre-answer all-layer patch sweep across turns 1, 2, 3 — three 400-trial experiments in one bundled job. **All three turns null on stable targets.** Across the full 1200 new trials, 1 lone "flip-to-src" at turn 3 was traced to attempt_581's 15% perturbation-fallback to horse (the same prior-attractor leakage seen in phase 2b), not a real causal effect. Combined with phases 1/2a/2b: 0 / 2280 genuine flips on the 19 stable targets across every single-position patch tested. See `docs/progress/M4-patch-turnsweep-null.md` and DECISIONS D-38. **Phase 2c-ii:** position-band patch with on-the-fly src forward-pass capture is the next structural test. NOT submitted autonomously — it's a moderate script refactor and the choice between "K=5 trailing scaffolding band at turn 4", "shift to turn-0 Ready output position", or "positional probing sweep first to localize where class signal enters" is a research-judgment call worth user input.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -106,36 +106,54 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step (M4 phase 2c-i):** sweep across earlier-turn
-pre-answer positions using already-saved activations. Each attempt
-directory has `turn_01_activations.pt` through `turn_04_activations.pt`
-on TSUBAME — same shape (49, 3840), captured at each turn's pre-answer
-position. So per-turn patching is free (no new captures needed).
+**Next concrete step (M4 phase 2c-ii) — needs user input first.**
+Phase 2c-i closed the "single-position pre-answer at any turn" branch
+with 0 / 2280 genuine flips on stable targets. The natural next test
+is a **position-band patch**: replace src's residuals across a window
+of positions in tgt, all layers, see if reveals flip. Three possible
+shapes for that experiment, each with different scope/cost:
 
-Plan:
-1. Extend `scripts/patch_turn4.py` with `--turn N` (1..4, default 4) —
-   selects which turn's pre-answer position to patch and which
-   `turn_NN_activations.pt` file to load as the src vector.
-   Generalize the existing `_context_up_to_q4_preanswer` to
-   `_context_up_to_qN_preanswer` parameterized by N.
-2. Bundle one job script that runs the all-layer patch at turn 1,
-   turn 2, turn 3 in sequence (one model load amortized over three
-   experiments). Output: three JSON files
-   `runs/m4_patch_turnN_12b_default_L1-48all.json` for N in 1, 2, 3.
+(a) **K=5 trailing-scaffolding band at turn 4 pre-answer.** Patch the
+    last 5 prefill tokens (`<end_of_turn>\n<start_of_turn>model\n`),
+    which are token-aligned across runs without per-run alignment
+    work. Cheapest variant. Tests whether the class commitment is
+    spread across the immediate scaffolding band rather than living
+    on a single token. Engineering: add a "live src capture" path
+    (forward-pass src up to qN-preanswer with `output_hidden_states=True`
+    and grab a position window) plus a `--position-window K` CLI.
 
-Decision tree on phase 2c-i outcomes:
+(b) **Shift the patch site to turn-0 Ready output position.** In the
+    self-chosen condition the model first emits `Ready` after
+    silently picking an animal — plausibly the class-commitment
+    write site. Single-position patch at the Ready token, all layers.
+    Engineering: add a context builder that ends at Ready (instead of
+    a turn-N pre-answer) plus the live-capture path. Different
+    structural hypothesis from (a): "earlier in the dialogue" rather
+    than "wider on the same position."
 
-- **Some turn flips reveals**: the bottleneck is at *that* turn's
-  pre-answer position. Narrow further by layer band; that turn's
-  pre-answer position becomes the new probe locus.
-- **All three turns null**: no single-position patch on any
-  pre-answer position is sufficient. Either the bottleneck is at
-  positions we haven't tested (turn-0 Ready output, turn-4 question
-  text positions), or class info is encoded redundantly across
-  positions. Phase 2c-ii then escalates to a **position-band patch**
-  with on-the-fly src capture (extend the script to forward-pass src
-  through `_context_up_to_qN_preanswer` and grab residuals at the last
-  K positions), patching tgt's last K positions simultaneously.
+(c) **Positional probing sweep first.** Before another patching
+    experiment, run `decode_turns.py` (or a positional variant) to
+    map *where* in the residual stream the class signal first
+    becomes decodable. Currently we only have probe scores at
+    pre-answer positions of each turn; extending to all positions of
+    the prefix would tell us the earliest position where LR LOO is
+    above chance, which would inform which position to patch.
+
+Each is the right next test under a different working hypothesis.
+(a) bets on a small coordinated multi-token write at the turn-4
+boundary. (b) bets on early commitment at the Ready token. (c) bets
+that we should localize-then-patch rather than guess-then-patch.
+
+Pausing autonomous execution until the user picks a direction.
+
+**Side investigations still pending (non-blocking):**
+- `attempt_588` baseline non-determinism is reproducible across all
+  four turn replays — not transient, but a persistent divergence from
+  the original streaming-collection forward pass. Worth a short
+  investigation if future patching depends on horse trial reliability.
+- First-step logit-diff metric is unreliable for dog (reveals don't
+  begin with the ` Dog` token). Upgrade to multi-step scan when any
+  positive signal emerges and metric sensitivity becomes load-bearing.
 
 **Methodological follow-up (deferred to whichever phase produces a
 positive signal):** the first-step logit-diff metric is unreliable for

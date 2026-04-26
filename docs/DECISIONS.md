@@ -926,5 +926,93 @@ logit-diff metric remains unreliable for dog. Will fix when any
 positive signal emerges (and metric sensitivity becomes the
 bottleneck rather than position scope).
 
+## 2026-04-26 — D-38: Per-turn pre-answer patch sweep is null at every turn; no single-position patch flips reveals on stable targets
+
+Job `7260593` ran phase 2c-i: all-layer (L1-L48) single-position
+patching at turn 1, turn 2, turn 3 pre-answer positions on the same
+n=80 default scale-up collection (same 16-cell trial design as
+phases 1/2a/2b). Total 1200 new patched trials + 60 baselines.
+Outputs at `runs/m4_patch_turn{1,2,3}_12b_default_L1-48all.json`;
+detailed writeup at `docs/progress/M4-patch-turnsweep-null.md`.
+
+**Result — comprehensive null on stable targets.**
+
+Across the entire sweep, only one target run is baseline-non-deterministic:
+`attempt_588` (horse class, baseline always returns `cow`). The other
+19 target runs reproduce their on-disk reveals exactly under all four
+turn baselines.
+
+Counting non-tgt-preserving outputs on the 19 *stable* targets only
+(excluding `attempt_588`):
+
+| turn | non-tgt outputs / 300 trials | flip-to-src |
+|---|---:|---:|
+| 1 | 2 | 0 |
+| 2 | 4 | 0 |
+| 3 | 1 | 1* |
+| 4 | 3 | 0 |
+
+*The lone Turn-3 flip-to-src (`horse→cow into attempt_581 → horse`)
+is part of `attempt_581`'s 15% perturbation-fallback to horse: across
+all 4 turns, 9/60 trials patched into `attempt_581` produce `horse`
+*regardless* of src class (dog, elephant, or horse). The Turn-3 case
+just happens to align src and fallback. It's attractor leakage, not a
+real flip-to-src.
+
+**Phases 1 + 2a + 2b + 2c-i jointly:** 0 / 2280 genuine flips-to-src
+on stable targets across all single-position patches tested
+({L29, L27-L48, L1-L48} × {turn 1, turn 2, turn 3, turn 4}
+pre-answer positions).
+
+**Interpretation.** The class-decodable signal at L29-L48 (M3 turn-4
+LR LOO 0.79, 3.2x chance) is *legible* at every turn's pre-answer
+position but **decisively off the reveal-token causal path** at all
+of them. The reveal must compute via attention to *other* token
+positions in the dialogue prefix (turn-0 Ready output, turn-N
+question-text positions, earlier-turn answer-token positions, etc.),
+or via a redundant distributed encoding across multiple positions.
+
+**Decision — phase 2c-ii method:**
+
+1. **Position-band patch** is the structural test that follows from
+   the comprehensive single-position null. Replace src's activations
+   across a *window* of positions in tgt's context, all layers, and
+   see if reveals flip.
+2. **Implementation work required.** The current script loads saved
+   single-position activations from disk. A position-band patch needs
+   a "live src capture" path: for each src run, build the
+   up-to-qN-preanswer context, forward-pass with
+   `output_hidden_states=True`, and grab activations across a window.
+   Then patch tgt's same-shape window. Add `--position-window K` CLI.
+3. **First test design.** K=5 at turn-4 pre-answer covers the chat
+   template scaffolding (`<end_of_turn>\n<start_of_turn>model\n`),
+   which is token-aligned across runs without per-run alignment work.
+   All 48 layers patched.
+4. **Escalation paths.** If K=5 nulls: (a) extend to K=20 with per-run
+   question-text alignment, (b) shift the window to a different
+   position locus (turn-0 Ready output, requires a new
+   up-to-Ready context builder), or (c) patch multiple discontiguous
+   positions simultaneously.
+
+**Held back until user weighs in.** Phase 2c-ii is a moderate refactor
+(adds the live-capture path alongside the existing saved-load path)
+and the structural choice between "K=5 scaffolding band at turn 4",
+"shift to turn-0 Ready position", and "positional probing sweep
+first to find where class signal *enters*" is a research-judgment
+call worth a brief conversation. NOT submitted autonomously.
+
+**Side observation tagged for future work:** `attempt_588` is
+persistently non-deterministic across replays in a way that's
+identical across all four turn baselines — so it's not transient
+forward-pass nondeterminism but a reproducible divergence from the
+original collection's streaming generation. Worth a short
+investigation if any future result depends on horse trial reliability.
+
+`attempt_581` is the second target whose responses are unstable, but
+in a different way: its *baseline* is deterministic (always `cow`),
+but it tips to `horse` ~15% of the time under heavy residual
+disruption. Closer to the cow/horse decision boundary than its 4
+cow-class peers in the model's representation space.
+
 
 
