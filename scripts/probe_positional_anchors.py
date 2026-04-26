@@ -238,7 +238,7 @@ def main() -> int:
         "layers": list(range(n_layers)),
         "class_ids": classes_present,
         "centroids": centroids,
-        "counts": counts,
+        "counts": counts_full,
     }, centroid_path)
     print(f"Wrote {centroid_path} (centroids shape {tuple(centroids.shape)})")
 

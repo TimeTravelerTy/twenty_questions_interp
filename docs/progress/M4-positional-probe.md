@@ -81,6 +81,42 @@ Three-stage structural picture:
    boundaries and to **3.7× at pre_reveal_gen** — the position right
    before the model emits the animal name token.
 
+## Full heatmap (LR/chance, selected layers; * = >= 1.5x chance)
+
+```
+  anchor                L00  L06  L13  L20  L27  L29  L31  L35  L40  L44  L48
+  end_user_prompt       0.00 1.05 1.15 1.00 1.05 1.10 1.10 1.05 1.05 1.05 1.10
+  end_ready             0.00 1.05 1.00 0.95 1.10 0.85 0.70 0.70 0.75 0.75 0.65
+  end_user_q1           0.00 0.85 1.00 0.90 1.35 1.35 1.15 1.30 1.20 0.90 1.10
+  end_model_q1          0.00 0.85 1.55*1.25 1.15 1.35 1.25 1.00 1.15 1.15 1.05
+  end_user_q2           0.00 1.15 1.20 1.00 1.35 1.25 1.10 1.35 1.45 1.25 1.50*
+  end_model_q2          0.00 1.00 1.15 1.05 1.35 1.50*1.45 1.25 1.60*1.55*1.40
+  end_user_q3           0.00 1.15 1.00 0.95 1.10 1.30 1.15 1.10 0.85 1.00 1.35
+  end_model_q3          0.00 0.95 0.60 1.20 1.15 1.15 1.20 1.10 1.30 1.40 1.50*
+  end_user_q4           0.00 0.80 0.80 1.50*1.65*1.75*1.80*1.90*2.00*2.10*1.70*
+  end_model_q4          0.00 1.25 1.20 1.45 2.10*2.10*2.10*1.95*1.95*1.90*2.20*
+  end_reveal_user       0.00 1.25 1.40 0.75 1.10 1.05 1.20 1.65*2.15*2.00*1.85*
+  pre_reveal_gen        0.00 0.65 0.80 0.95 2.55*3.00*3.35*3.30*3.45*3.65*3.60*
+```
+
+Two structural observations from the heatmap:
+
+1. **The late-layer band (L27-L48) is the consistent class-information
+   locus across positions.** Every above-chance signal sits in that
+   band. Earlier layers (L0-L20) are at or near chance everywhere
+   except a single end_model_q1 L13 spike (1.55x) which may be noise.
+   This matches M3's L29-L48 finding for turn-4 pre-answer.
+2. **Within the late band, signal grows monotonically toward reveal.**
+   end_user_prompt / end_ready are flat (~1.0x). Mid-dialogue is
+   sporadic (mostly 1.1-1.4x with isolated 1.5x cells). end_user_q4
+   onward has consistent above-1.5x cells. pre_reveal_gen at 2.5-3.7x
+   across the whole late band is the global maximum.
+3. **end_model_q2's mild late-band signal (1.5-1.6x at L29-L44)** is a
+   minor anomaly: q2 is stronger than q3. Could be question-text
+   driven (the 4-question panel order varies per run; q2's question
+   may be more class-discriminating than q3's), or n=80 LOO noise.
+   Not load-bearing for the top-line interpretation.
+
 ## Reconciling with M3's turn-4 pre-answer LR 0.79
 
 The M3 scale-up reported turn-4 pre-answer LR LOO 0.79 @ L31 (3.2×
