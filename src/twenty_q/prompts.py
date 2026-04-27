@@ -90,7 +90,12 @@ def calibration_prompt_name_paraphrase(
     return RenderedPrompt(system=system, user=user)
 
 
-SELF_CHOSEN_VARIANTS = ("default", "less_obvious", "commit_strong")
+SELF_CHOSEN_VARIANTS = (
+    "default",
+    "less_obvious",
+    "commit_strong",
+    "verbose_neutral",  # length-matched control for commit_strong (no commitment framing)
+)
 
 
 def self_chosen_prompt(
@@ -135,6 +140,24 @@ def self_chosen_prompt(
             "Do not delay the choice; commit to it before responding. Once you "
             "say Ready, you cannot change your animal — it must remain the "
             "same throughout every question. Do not state the name of the "
+            "animal. When your choice is locked in, reply with only the single "
+            "word: Ready"
+        )
+    elif variant == "verbose_neutral":
+        # Length-matched control for commit_strong. Same approximate token count
+        # but the extra text restates GAME RULES, not commitment framing.
+        # If commit_strong shifts behavior but verbose_neutral does not, the
+        # effect is from the commitment framing; if both shift behavior, the
+        # extra prompt tokens (more compute on the choice position) are doing
+        # the work.
+        choose_line = (
+            "Choose exactly one animal from the list above and commit to it as "
+            "your secret for the entire game. Remember the rules: you will "
+            "answer only with 'Yes' or 'No' — no explanations, no synonyms, no "
+            "additional words. Each yes/no answer must be truthful for the "
+            "animal you have chosen. Do not use the animal's name or any "
+            "description that identifies it. Keep responses concise. Keep the "
+            "choice fixed; do not change it. Do not state the name of the "
             "animal. When your choice is locked in, reply with only the single "
             "word: Ready"
         )
