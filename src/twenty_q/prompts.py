@@ -90,7 +90,7 @@ def calibration_prompt_name_paraphrase(
     return RenderedPrompt(system=system, user=user)
 
 
-SELF_CHOSEN_VARIANTS = ("default", "less_obvious")
+SELF_CHOSEN_VARIANTS = ("default", "less_obvious", "commit_strong")
 
 
 def self_chosen_prompt(
@@ -123,6 +123,18 @@ def self_chosen_prompt(
             "your secret for the entire game. Pick a less obvious animal from "
             "the list — avoid the most stereotypical first choices. Keep the "
             "choice fixed; do not change it. Do not state the name of the "
+            "animal. When your choice is locked in, reply with only the single "
+            "word: Ready"
+        )
+    elif variant == "commit_strong":
+        choose_line = (
+            "Choose exactly one animal from the list above and commit to it as "
+            "your secret for the entire game. Take a moment to mentally pick "
+            "your animal — by the time you reply with 'Ready', you must have "
+            "already chosen and locked in the specific animal you will use. "
+            "Do not delay the choice; commit to it before responding. Once you "
+            "say Ready, you cannot change your animal — it must remain the "
+            "same throughout every question. Do not state the name of the "
             "animal. When your choice is locked in, reply with only the single "
             "word: Ready"
         )
