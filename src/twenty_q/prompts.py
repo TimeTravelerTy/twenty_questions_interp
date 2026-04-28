@@ -95,6 +95,8 @@ SELF_CHOSEN_VARIANTS = (
     "less_obvious",
     "commit_strong",
     "verbose_neutral",  # length-matched control for commit_strong (no commitment framing)
+    "internal_locus",  # externalize-via-imagined-writing framing
+    "introspection_aware",  # tells the model we will analyze its activations via logit lens
 )
 
 
@@ -142,6 +144,55 @@ def self_chosen_prompt(
             "same throughout every question. Do not state the name of the "
             "animal. When your choice is locked in, reply with only the single "
             "word: Ready"
+        )
+    elif variant == "internal_locus":
+        # Externalize-via-imagined-writing framing. Asks the model to mentally
+        # commit by visualizing the act of writing the chosen animal's name on
+        # a piece of paper. The "ink on paper" metaphor invokes a persistent,
+        # unchangeable representation. Tests whether concrete-imagery anchoring
+        # (a different kind of commitment elicitation than commit_strong's
+        # direct instruction) induces a residual-stream commitment signal.
+        choose_line = (
+            "Choose exactly one animal from the list above and commit to it as "
+            "your secret for the entire game. Imagine writing the name of your "
+            "chosen animal on a piece of paper inside your mind — clearly and "
+            "deliberately, letter by letter. Once you have finished writing, "
+            "the choice is fixed: like ink on paper, it cannot be erased, "
+            "rewritten, or replaced. The animal you wrote is the animal you "
+            "will keep for every question that follows. Do not state the name "
+            "of the animal. When you have finished writing, reply with only "
+            "the single word: Ready"
+        )
+    elif variant == "introspection_aware":
+        # Introspection-aware framing. Tells the model explicitly that we are
+        # running a mechanistic-interpretability analysis on its hidden
+        # activations and references specific techniques (logit lens, residual
+        # stream at intermediate layers). Grounded in the introspection
+        # literature: Lindsey et al. 2025 "On the Biology of Large Language
+        # Models" and related Anthropic work showing that LLMs have some
+        # introspective access to their internal states, plus the empirical
+        # observation that prompts which make the experimenter's analytic
+        # frame explicit can shift what gets surfaced at the final layer
+        # (reduced suppression of mid-network signals).
+        #
+        # Tests whether explicit experimenter-frame priming induces the model
+        # to make its class commitment more legible in the residual stream
+        # at end_ready.
+        choose_line = (
+            "Choose exactly one animal from the list above and commit to it as "
+            "your secret for the entire game. We are running a mechanistic-"
+            "interpretability analysis on your hidden activations during this "
+            "game — specifically, we will use the logit lens technique to read "
+            "out which animal you chose by examining the residual stream at "
+            "intermediate layers. For this analysis to succeed, your chosen "
+            "animal needs to be represented as clearly and persistently as "
+            "possible in your internal state. When you say Ready, please make "
+            "a focal mental commitment to the specific animal you have chosen, "
+            "and hold that representation stably throughout the game. Do not "
+            "suppress the representation in late layers; do not distribute it "
+            "across multiple candidates — keep it focal on the one animal you "
+            "chose. Do not state the name of the animal in text. When your "
+            "choice is locked in, reply with only the single word: Ready"
         )
     elif variant == "verbose_neutral":
         # Length-matched control for commit_strong. Same approximate token count
