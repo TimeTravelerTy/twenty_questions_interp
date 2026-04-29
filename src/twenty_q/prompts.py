@@ -97,6 +97,40 @@ SELF_CHOSEN_VARIANTS = (
     "verbose_neutral",  # length-matched control for commit_strong (no commitment framing)
     "internal_locus",  # externalize-via-imagined-writing framing
     "introspection_aware",  # tells the model we will analyze its activations via logit lens
+    "lipsum_filler",  # Vogel et al. 2026 matched-filler: extra prefill compute substrate before Ready
+)
+
+
+# Lorem ipsum filler block used by the `lipsum_filler` self-chosen variant.
+# Length is roughly matched to a few hundred tokens so the prefill at end_ready
+# integrates over substantially more positions than the other variants. Content
+# is standard placeholder Latin; it carries no semantic relation to animals.
+_LIPSUM_FILLER = (
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do "
+    "eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim "
+    "ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut "
+    "aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit "
+    "in voluptate velit esse cillum dolore eu fugiat nulla pariatur. "
+    "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui "
+    "officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde "
+    "omnis iste natus error sit voluptatem accusantium doloremque "
+    "laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore "
+    "veritatis et quasi architecto beatae vitae dicta sunt explicabo. "
+    "Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut "
+    "fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem "
+    "sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum quia dolor "
+    "sit amet, consectetur, adipisci velit, sed quia non numquam eius modi "
+    "tempora incidunt ut labore et dolore magnam aliquam quaerat voluptatem. "
+    "Ut enim ad minima veniam, quis nostrum exercitationem ullam corporis "
+    "suscipit laboriosam, nisi ut aliquid ex ea commodi consequatur. "
+    "Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse "
+    "quam nihil molestiae consequatur, vel illum qui dolorem eum fugiat "
+    "quo voluptas nulla pariatur. At vero eos et accusamus et iusto odio "
+    "dignissimos ducimus qui blanditiis praesentium voluptatum deleniti "
+    "atque corrupti quos dolores et quas molestias excepturi sint occaecati "
+    "cupiditate non provident, similique sunt in culpa qui officia deserunt "
+    "mollitia animi, id est laborum et dolorum fuga. Et harum quidem rerum "
+    "facilis est et expedita distinctio."
 )
 
 
@@ -193,6 +227,34 @@ def self_chosen_prompt(
             "across multiple candidates — keep it focal on the one animal you "
             "chose. Do not state the name of the animal in text. When your "
             "choice is locked in, reply with only the single word: Ready"
+        )
+    elif variant == "lipsum_filler":
+        # Vogel et al. 2026 "Latent Introspection" matched-filler condition.
+        # A long block of placeholder text is inserted between the choice
+        # instruction and the Ready cue. The model then prefills over many
+        # additional positions before the residual stream is read at
+        # end_ready, giving the network more compute substrate to integrate
+        # any latent class commitment.
+        #
+        # In Vogel et al., matched lipsum filler paired with a
+        # vague-mechanism introspection question achieved 84% balanced
+        # accuracy on Qwen2.5-Coder-32B — higher than explicit
+        # pro-introspection framing alone. If this variant shifts
+        # end_ready probe-decodability above chance at 12B, the
+        # "no commitment" reading of D-42 needs updating to "no
+        # commitment without compute substrate". If it nulls, we have
+        # one more axis of robustness for the late-dialogue-integration
+        # mechanism.
+        choose_line = (
+            "Choose exactly one animal from the list above and commit to it as "
+            "your secret for the entire game. Take your time to settle on the "
+            "specific animal. Use the following passage as space to think; "
+            "do not respond to it, simply read through it as you decide:\n\n"
+            f"{_LIPSUM_FILLER}\n\n"
+            "Once you have settled on the specific animal, keep that choice "
+            "fixed; do not change it. Do not state the name of the animal. "
+            "When your choice is locked in, reply with only the single word: "
+            "Ready"
         )
     elif variant == "verbose_neutral":
         # Length-matched control for commit_strong. Same approximate token count

@@ -1281,8 +1281,129 @@ Open scale-axis question (per project_scale_question memory):
 
 Held for user to confirm: kick off 27B self-chosen collection?
 
+## 2026-04-29 — D-42: Comparative analysis across 4 prompt variants and 27B; improvisation hypothesis robust on every axis; flip-text behavioral evidence deprioritized
 
+**Run window:** 2026-04-26 to 2026-04-28 (jobs `7272281`, `7272415`,
+`7272417`, `7272708`, `7274562`, `7274563`, `7274689`, `7274690`).
+**Companion progress doc:** `docs/progress/M4-comparative-prompt-and-scale.md`.
 
+### Methodological move: deprioritize flip-text behavioral evidence
+
+User refined a worry about D-40: even though flipping a yes/no answer
+shifts the reveal class in 74.7% of trials at 12B, this is consistent
+with **either** "no commitment" **or** "committed-but-overridden plus
+confabulation." A system that committed and then lost access to the
+commitment under perturbed dialogue would produce the same behavioral
+fingerprint as a system that never committed and is improvising. By
+analogy, humans whose memory of a past event is altered will smoothly
+confabulate a coherent narrative without flagging the change; this
+does not show that no original memory was formed.
+
+Flip-text behavioral metrics (kept-class rate, output entropy under
+flip) are therefore **demoted to illustrative**, not load-bearing,
+for the M4 conclusion. The load-bearing evidence is residual-stream
+and lens-based, which test whether class commitment is **present in
+the residual at end_ready** in a way a downstream layer can read:
+
+1. Patching null at every position × layer scope tested
+   (D-35 → D-38: 0/2280 trials).
+2. Positional probe at chance at end_ready in 12B default and
+   12B commit_strong (D-39 + this entry).
+3. Cross-class baseline ~0 at L25-L30 in all 5 conditions (D-41 +
+   this entry).
+4. Rank check at L30: dominant rank-1 class is generic-prior-
+   determined, not run-specific (D-41 + this entry).
+
+The confabulation worry does not apply to (1)-(4) because they look
+at internal state, not behavior.
+
+### Prompt-axis robustness (4 12B variants)
+
+The hypothesis "12B commits at end_ready" was tested under four
+distinct prompt manipulations:
+
+- `default` — baseline.
+- `commit_strong` — explicit by-Ready instruction.
+- `internal_locus` — externalize-via-imagined-writing
+  ("ink on paper" metaphor).
+- `introspection_aware` — explicit mech-interp framing referencing
+  logit lens and asking the model to keep the representation focal.
+
+All four show end_ready LR LOO ~1.2-1.4× chance, mid-layer
+cross-class diff ~0 (+0.27 to +0.35 logits at L30), and the same
+generic-prior dominance pattern at rank-1 (horse). None induce a
+residual-stream commitment signature at end_ready.
+
+The introspection_aware null is the most striking: a prompt that
+explicitly references the experimenter's analytic frame and asks
+the model to make its choice legible at intermediate layers
+produces no class-specific signal at L25-L30. Either the model
+lacks fine-grained introspective control over its residual stream,
+or the late-network dialogue-integration mechanism dominates any
+introspective effort. Neither reading supports
+"commitment-is-just-prompt-fragile."
+
+### Scale-axis robustness (12B → 27B default)
+
+Behavioral output entropy under flip collapses 6× (0.845 → 0.137
+nats); 27B's flip-text consistency is dramatically sharper. **But
+the residual-stream mechanism does not change with scale.**
+
+- Cross-class L30 diff: +0.30 logits (12B) → +0.01 (27B). Mid-network
+  signal is *flatter* at scale, not sharper.
+- L48 differentiation: ~5-15 logits (12B) → ~10-46 logits (27B).
+  *Much* steeper at the final layer.
+- Dominant rank-1 class at L30: shifts from `horse` (12B) to `tiger`
+  (27B) — same generic-prior dominance pattern, different identity.
+
+**27B improvises more decisively via sharper late-network dialogue
+integration, not via earlier commitment.** The mechanism is the
+same; scale sharpens the consistency engine.
+
+### Attractor-axis robustness
+
+The attractor identity is mutable across both prompt and scale:
+
+- 12B default: `{cow, dog, elephant, horse}`.
+- 12B less_obvious: + gorilla, kangaroo, penguin.
+- 12B introspection_aware: `cow, elephant, horse` (DOG dropped).
+- 27B default: `{cow, dog, elephant, gorilla, horse, tiger}`
+  (+ shark at low frequency).
+
+**The attractor identity is mutable; the commitment-mechanism is
+stable.** No tested manipulation produced the qualitative shift we'd
+expect if scale or prompting moved the model from improvisation to
+commitment (end_ready rising above chance, patching becoming causal,
+lens trajectory showing a mid-network commitment plateau).
+
+### Caveats
+
+- 27B formal probe-anchors LOO hit walltime at 3h30m on cpu_8 and
+  was not retried; the lens-based cross-class baseline is the
+  substitute (strictly weaker but directionally consistent).
+- 12B internal_locus and 12B introspection_aware have only the
+  lens-based proxy; default and commit_strong have full formal
+  probe-anchors data.
+
+### Decision consequence — what's left for M4
+
+**One last prompt-variant probe before declaring M4 done:**
+the `lipsum_filler` variant (Vogel et al. 2026 "Latent
+Introspection"). Inserts a long block of placeholder text between
+the choice instruction and the Ready cue, giving the model
+additional prefill compute substrate before end_ready is read.
+In Vogel et al., matched lipsum filler with a vague-mechanism
+introspection question achieved 84% balanced accuracy on
+Qwen2.5-Coder-32B — higher than explicit pro-introspection framing
+alone. If lipsum_filler shifts end_ready probe-decodability above
+chance at 12B, the "no commitment" reading needs updating to "no
+commitment without compute substrate". If it nulls, we have a fifth
+axis of robustness.
+
+After lipsum_filler, the natural next move is M5: SAE / transcoder
+feature case studies on the late-network dialogue-integration step,
+where the mechanism is strong enough for feature-level dissection
+to be the right resolution.
 
 
 
