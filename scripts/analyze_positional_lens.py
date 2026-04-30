@@ -76,11 +76,11 @@ def _find_unembed_path(model):
 def _bank_class_first_token_ids(handle, bank) -> dict[str, int]:
     out: dict[str, int] = {}
     for c in bank.candidates:
-        ids = handle.tokenizer(" " + c.display_name, add_special_tokens=False)["input_ids"]
+        ids = handle.tokenizer(" " + c.display, add_special_tokens=False)["input_ids"]
         if not ids:
-            ids = handle.tokenizer(c.display_name, add_special_tokens=False)["input_ids"]
+            ids = handle.tokenizer(c.display, add_special_tokens=False)["input_ids"]
         if not ids:
-            raise RuntimeError(f"Empty tokenization for {c.display_name!r}")
+            raise RuntimeError(f"Empty tokenization for {c.display!r}")
         out[c.id] = ids[0]
     return out
 
