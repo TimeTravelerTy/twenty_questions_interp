@@ -10,6 +10,7 @@ methodological direction from the user.
 | 12B commit_strong | gemma-3-12b-it | commit_strong | `7272281` | `7272417` |
 | 12B internal_locus | gemma-3-12b-it | internal_locus | `7274562` | `7274689` |
 | 12B introspection_aware | gemma-3-12b-it | introspection_aware | `7274563` | `7274690` |
+| 12B lipsum_filler | gemma-3-12b-it | lipsum_filler | `7287532` | (skipped — flip-text deprioritized) |
 | 27B default | gemma-3-27b-it | default | `7272415` | `7272708` |
 
 ## Caveat on flip-text behavioral evidence
@@ -63,6 +64,7 @@ confabulation worry does not apply.
 | 12B commit_strong | cow, dog, elephant, horse | 35.8% | 3.70 |
 | 12B internal_locus | cow, dog, elephant, horse | similar | similar |
 | 12B introspection_aware | **cow, elephant, horse** (dog dropped) | similar | similar |
+| 12B lipsum_filler | cow, dog, elephant, horse | 43.0% | 3.13 |
 | 12B less_obvious (D-34, ref) | + gorilla, kangaroo, penguin (6 cls) | 38.5% | 3.90 |
 | **27B default** | + tiger, gorilla, shark (7 cls) | 40.0% | 4.27 |
 
@@ -78,7 +80,13 @@ gains tiger and gorilla without any prompt nudge.
 | 12B commit_strong | 0.794 | 7/16 | 4/16 |
 | 12B internal_locus | 0.893 | 8/16 | 3/16 |
 | 12B introspection_aware | 0.697 | 5/16 | 2/16 |
+| 12B lipsum_filler | n/a | n/a | n/a |
 | **27B default** | **0.137** | **0/28** | **23/28** |
+
+(For lipsum_filler, flip-text was skipped on user direction — flip-text
+behavioral evidence is now treated as illustrative-only per the
+confabulation caveat above; running it for one more variant adds no
+load-bearing information.)
 
 (Maximum entropy = ln(20) = 2.996 for uniform-over-bank.)
 
@@ -90,6 +98,7 @@ gains tiger and gorilla without any prompt nudge.
 | 12B commit_strong | +0.27 |
 | 12B internal_locus | +0.28 |
 | 12B introspection_aware | +0.35 |
+| 12B lipsum_filler | +0.39 |
 | 27B default | +0.01 |
 
 All five conditions show ~0 class-specific elevation in the residual
@@ -106,6 +115,7 @@ striking: the mid-layer signal is even *flatter* than 12B
 | 12B commit_strong | horse (in 8/14 cells) |
 | 12B internal_locus | horse (typically) |
 | 12B introspection_aware | horse (typically) |
+| 12B lipsum_filler | **horse (100% share at L30 across all 600 baseline runs)** |
 | 27B default | **tiger** (in 19/20 cells) |
 
 In every condition, the rank-1 class at L30 is determined by which
@@ -145,9 +155,9 @@ lens-based proxy is the substitute.)
 
 ## Three robustness axes for the improvisation hypothesis
 
-### Prompt axis (4 12B variants)
+### Prompt axis (5 12B variants)
 
-The hypothesis "12B commits at end_ready" was tested under four
+The hypothesis "12B commits at end_ready" was tested under five
 distinct prompt manipulations:
 
 - `default` — baseline ("commit to it as your secret")
@@ -158,21 +168,34 @@ distinct prompt manipulations:
 - `introspection_aware` — explicit mech-interp framing ("we will
   use the logit lens technique to read out which animal you chose;
   do not suppress the representation in late layers")
+- `lipsum_filler` — Vogel et al. 2026 "Latent Introspection"
+  matched filler: ~500-token placeholder block between the choice
+  instruction and the Ready cue, giving the model substantially
+  more prefill compute substrate before end_ready is read.
 
-**All four show the same pattern:** end_ready LR ~1.2-1.4× chance,
-mid-layer cross-class diff ~0, generic-prior dominance at rank-1.
-None of these prompt manipulations induce residual-stream commitment
-at end_ready.
+**All five show the same pattern:** end_ready / pre_reveal_gen
+mid-layer cross-class diff ~0 (range +0.27 to +0.39 at L30 across
+the four matched-bank 12B variants; rank-1 = horse with near-100%
+share at L30 regardless of run). None of these prompt manipulations
+induce a run-specific residual-stream commitment at end_ready.
 
-The introspection_aware variant is the most striking null result: a
-prompt that explicitly references the experimenter's analysis
-methodology and asks the model to keep its representation focal and
-non-suppressed produces no class-specific signal at L25-L30.
-Either the model lacks introspective fine-grained control over its
-own residual stream regardless of prompting, or the late-network
-dialogue-integration mechanism is dominant enough to override any
-introspective effort. Neither possibility supports the
-"commitment-is-just-prompt-fragile" reading.
+The introspection_aware variant is striking as the most direct
+null: a prompt that explicitly references the experimenter's
+analysis methodology and asks the model to keep its representation
+focal and non-suppressed produces no class-specific signal at
+L25-L30. Either the model lacks introspective fine-grained control
+over its own residual stream regardless of prompting, or the
+late-network dialogue-integration mechanism is dominant enough to
+override any introspective effort.
+
+The lipsum_filler variant is striking as the cleanest "more compute"
+null: ~500 extra tokens of prefill before end_ready do not move the
+mid-layer signal off chance (+0.39 at L30, vs +0.30 baseline) and
+do not change the rank-1 generic-prior pattern (horse, 100% share).
+If a latent commitment could form given enough prefill compute, this
+is where we'd expect to see it — and we do not. Neither variant
+supports the "commitment-is-just-prompt-fragile" or
+"commitment-is-compute-starved" readings.
 
 ### Scale axis (12B → 27B default)
 
@@ -203,6 +226,9 @@ across both prompt and scale:
 - 12B default: `{cow, dog, elephant, horse}`
 - 12B less_obvious: + gorilla, kangaroo, penguin
 - 12B introspection_aware: cow/elephant/horse (DOG dropped)
+- 12B lipsum_filler: `{cow, dog, elephant, horse}` (top-1 share
+  43%, slightly *narrower* than default — extra filler if
+  anything tightens the attractor)
 - 27B default: `{cow, dog, elephant, gorilla, horse, tiger}` (+ shark
   at low frequency)
 
@@ -211,44 +237,44 @@ stable.** None of these prompt or scale manipulations produce the
 qualitative shift we'd expect if scale or prompting moved the model
 from improvisation to commitment (i.e., end_ready rising above chance,
 patching becoming causal, lens trajectory showing a mid-network
-commitment plateau). All five conditions are in the
-"improvisation, late dialogue integration" regime.
+commitment plateau). All six conditions (5 prompt variants on 12B
+plus 27B default) are in the "improvisation, late dialogue
+integration" regime.
 
-## Decision consequence — what's left for M4
+## Decision consequence — M4 closure
 
 The improvisation hypothesis is robust under every axis tested:
 
 1. Patching null at every position × layer scope tested.
 2. Positional probe at chance at end_ready in 12B (formal) and lens
-   proxy at chance across all 4 12B prompt variants and 27B.
-3. Cross-class baseline ~0 at L25-L30 in all 5 conditions.
+   proxy at chance across all 5 12B prompt variants and 27B.
+3. Cross-class baseline ~0 at L25-L30 in all 6 conditions
+   (12B `default` +0.30, `commit_strong` +0.27, `internal_locus`
+   +0.28, `introspection_aware` +0.35, `lipsum_filler` +0.39, 27B
+   default +0.01 — all small, none crosses any meaningful threshold,
+   27B is even *flatter* than 12B).
 4. Rank check confirms generic-prior dominance, not run-specific
-   commitment, in all 5 conditions.
+   commitment, in all 6 conditions (12B: horse rank-1 with
+   near-100% share regardless of run; 27B: tiger).
 
 **12B and 27B do not store class commitment in the residual stream
 at the supposed commitment site.** Class identity is constructed
 late in the network from the accumulated dialogue evidence.
 
-What's left to test before considering M4 done:
+The `lipsum_filler` variant was the natural last prompt-variant
+probe and it nulls cleanly: ~500 extra tokens of prefill compute
+substrate before end_ready do not produce a mid-layer commitment
+signal. The "no commitment without compute substrate" reading is
+ruled out alongside "commitment-is-prompt-fragile" and "introspective
+control with explicit framing".
 
-- **Lipsum-filler prompt variant** (Vogel et al. 2026 "Latent
-  Introspection"): user-side filler text between the choice
-  instruction and the Ready prompt, giving the model attention/
-  compute substrate to "settle" on a choice before emitting Ready.
-  In Vogel et al., the matched-lipsum-filler condition achieved the
-  highest detection accuracy (84% balanced accuracy on Qwen2.5-Coder-
-  32B) — higher than explicit pro-introspection framing alone. If
-  lipsum-filler shifts the end_ready probe-decodability above chance
-  at 12B, the "no commitment" reading would need updating to "no
-  commitment without compute substrate." If lipsum-filler also
-  nulls, we have one more axis of robustness.
-
-This is the natural last prompt-variant probe before M4 closes.
-After that, M5 (SAE / transcoder feature case studies) becomes the
-priority. The mechanism (late dialogue integration; class derivation
-from accumulated yes/no answers) is now characterized cleanly enough
-that asking "which features encode the constraint integration step"
-is a concrete next question.
+**M4 is now closed.** The mechanism is characterized: improvisation
+via late-network (L30→L48) dialogue integration; no mid-network
+class storage at any point in the prefix. M5 (SAE / transcoder
+feature case studies) becomes the priority — asking "which features
+encode the yes/no constraint accumulation and the class-derivation
+step" is the concrete next question, and the residual-level
+characterization is solid enough to support feature-level dissection.
 
 ## Methodological caveats
 
@@ -261,23 +287,36 @@ is a concrete next question.
    or cpu_16 with 6h walltime.
 2. **Per-variant probe completeness.** 12B default and 12B
    commit_strong have full formal probe-anchors data. 12B
-   internal_locus, 12B introspection_aware, and 27B have only the
-   lens-based proxy. Same conclusion at every readable layer; the
-   difference is whether class info in non-unembed-aligned subspaces
-   could be missed.
+   internal_locus, 12B introspection_aware, 12B lipsum_filler, and
+   27B have only the lens-based proxy. Same conclusion at every
+   readable layer; the difference is whether class info in
+   non-unembed-aligned subspaces could be missed.
 3. **Confabulation caveat for flip-text.** The 0.137-nats output
    entropy at 27B is genuinely striking but does not directly speak
    to commitment. A confabulating system would also show low entropy
    under counterfactual dialogue. Output entropy is treated here as
    a measure of consistency-engine sharpness, not commitment
    absence.
+4. **Lipsum_filler used 600 attempts vs 80 kept for the other 12B
+   variants.** The capture script processes all attempts with a
+   parsed reveal class, not only the canonical-bank-class kept set.
+   For the other variants the kept-vs-non-kept distinction was the
+   table reference (n=80); for lipsum_filler all 600 attempts have
+   reveal in the kept attractor `{cow, dog, elephant, horse}` so the
+   distinction collapses. Numbers are computed over 600 lipsum_filler
+   runs vs 80 for the other variants — the lipsum_filler estimate is
+   strictly more precise, not less.
 
 ## Artifacts
 
 - 5 flip-text-with-lens JSONs in `runs/m4_flip_yesno_text_*_lens.json`
+  (lipsum_filler intentionally not run — flip-text deprioritized).
 - 2 formal probe JSONs (12B default, 12B commit_strong) in
   `runs/m4_positional_probe_*.json`
 - 600-attempt collections per condition in `runs/diag/*`
-- TSUBAME captures in `runs/positional_residuals/*` (5 conditions)
+- TSUBAME captures in `runs/positional_residuals/*` (6 conditions)
+- Lens summary for lipsum_filler: `runs/m4_lipsumfiller_lens_summary.json`
+  (computed by `scripts/analyze_positional_lens.py`).
 - Reference: D-39 (positional probe), D-40 (flip-text behavioral),
-  D-41 (logit-lens robustness checks)
+  D-41 (logit-lens robustness checks), D-42 (this comparative
+  cross-prompt-and-scale analysis).

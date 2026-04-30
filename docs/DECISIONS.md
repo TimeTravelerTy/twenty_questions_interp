@@ -1405,5 +1405,43 @@ feature case studies on the late-network dialogue-integration step,
 where the mechanism is strong enough for feature-level dissection
 to be the right resolution.
 
+### Addendum 2026-04-30 — lipsum_filler null; M4 closed
+
+`lipsum_filler` collection (job `7287532`, 600 attempts in 515s) +
+positional residual capture (job `7289545`, 600 runs in 74s) +
+lens analysis (job `7290193`, computed by
+`scripts/analyze_positional_lens.py`) all in.
+
+- **Attractor**: same `{cow, dog, elephant, horse}` as 12B default;
+  top-1 share 43.0%, effective classes 3.13 (slightly *narrower* than
+  default — extra filler if anything tightens the attractor).
+- **Cross-class L30 own-elevation**: **+0.39 logits** (vs default
+  +0.30, commit_strong +0.27, internal_locus +0.28,
+  introspection_aware +0.35). Within noise of the other 12B variants,
+  far below any threshold that would indicate run-specific commitment.
+- **L25 own-elevation**: ~0.00 logits — clean chance baseline.
+- **Rank-1 at L30**: horse with **100.0% share across all 600 runs**,
+  regardless of own class. own_is_top_rate at L30 = 38%, exactly the
+  base rate of own=horse. Generic-prior dominance pattern, no
+  run-specific signal.
+- **Late layers**: own-elevation grows L30→L48: +0.39 → +1.51 → +4.76
+  → +8.15. Same late-network sharpening as the other variants.
+
+The `lipsum_filler` null is the cleanest possible falsification of
+the "compute-starved commitment" reading: ~500 extra prefill tokens
+of substrate before end_ready do nothing to the mid-layer signal.
+
+**M4 closed.** The improvisation hypothesis is now robust on
+prompt (5 12B variants), scale (12B → 27B), and attractor
+(mutable identity, stable mechanism) axes. Next: M5 — SAE /
+transcoder feature case studies on the late-network
+dialogue-integration step. Concrete first questions: which
+features encode the yes/no constraint accumulation? which
+features fire at the class-derivation step (L30 → L48)? Are
+they shared across the four-class attractor or class-specific?
+
+NOT submitted autonomously. Held back for user research-judgment on
+M5 scoping.
+
 
 
