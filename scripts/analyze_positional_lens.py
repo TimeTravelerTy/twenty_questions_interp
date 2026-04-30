@@ -111,6 +111,11 @@ def main() -> int:
     per_layer_diffs: list[list[float]] = []
     per_layer_rank1: list[list[str]] = []
     per_layer_own_is_top: list[list[bool]] = []
+    # per-class per-layer split on own/non-own membership
+    # logits_by_class_own[c][L] = list of (c-th class) logits when own=c
+    # logits_by_class_non_own[c][L] = list of (c-th class) logits when own!=c
+    logits_by_class_own: list[list[list[float]]] | None = None
+    logits_by_class_non_own: list[list[list[float]]] | None = None
     n_layers_seen: int | None = None
 
     used = 0
@@ -136,6 +141,8 @@ def main() -> int:
             per_layer_diffs = [[] for _ in range(n_layers)]
             per_layer_rank1 = [[] for _ in range(n_layers)]
             per_layer_own_is_top = [[] for _ in range(n_layers)]
+            logits_by_class_own = [[[] for _ in range(n_layers)] for _ in range(n_classes)]
+            logits_by_class_non_own = [[[] for _ in range(n_layers)] for _ in range(n_classes)]
 
         # move just this run's anchor slice to device
         slice_dev = residuals[a_idx].to(handle.model.device, dtype=handle.model.dtype)
@@ -152,6 +159,12 @@ def main() -> int:
             top_idx = int(torch.argmax(class_logits))
             per_layer_rank1[L].append(class_ids_list[top_idx])
             per_layer_own_is_top[L].append(top_idx == own_idx)
+            for ci in range(n_classes):
+                lg = float(class_logits[ci])
+                if ci == own_idx:
+                    logits_by_class_own[ci][L].append(lg)
+                else:
+                    logits_by_class_non_own[ci][L].append(lg)
         used += 1
 
     if used == 0:
@@ -171,6 +184,19 @@ def main() -> int:
         c = Counter(per_layer_rank1[L])
         top_class, top_count = c.most_common(1)[0]
         own_top = per_layer_own_is_top[L]
+        # D-41 style own-elevation: per-class (mean own - mean non-own); average over classes that occur as own
+        per_class_elev: dict[str, float] = {}
+        for ci, cid in enumerate(class_ids_list):
+            own_l = logits_by_class_own[ci][L]
+            non_l = logits_by_class_non_own[ci][L]
+            if not own_l or not non_l:
+                continue
+            per_class_elev[cid] = float(sum(own_l) / len(own_l) - sum(non_l) / len(non_l))
+        own_elev_mean = (
+            float(sum(per_class_elev.values()) / len(per_class_elev))
+            if per_class_elev
+            else 0.0
+        )
         summary["per_layer"].append({
             "layer": L,
             "mean_own_minus_non_own": float(sum(diffs) / len(diffs)),
@@ -178,6 +204,8 @@ def main() -> int:
             "rank1_top_class": top_class,
             "rank1_top_class_share": top_count / used,
             "own_is_top_rate": sum(own_top) / used,
+            "own_elevation_per_class": per_class_elev,
+            "own_elevation_mean_over_classes": own_elev_mean,
         })
 
     out_path.write_text(json.dumps(summary, indent=2))
