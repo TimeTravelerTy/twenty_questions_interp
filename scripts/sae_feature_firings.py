@@ -1,10 +1,17 @@
 """M5 Phase A1–A2 — SAE feature encoding of captured residuals.
 
-Loads a single Gemma Scope 2 SAE and encodes residuals at one (layer,
-anchor-set) slice from M4 / M5 capture `.pt` files, persisting the top-k
-feature activations per (run, anchor). Also reports reconstruction
-quality (MSE / FVU) so Phase A's sanity check (A1) can be done in the
-same pass.
+Loads a Gemma Scope 2 JumpReLU SAE directly from a HuggingFace repo
+(bypassing sae-lens's pretrained directory, which does not yet have
+`gemma-scope-2-12b-it` wired in as of sae-lens 6.30.1) and encodes
+residuals at one (layer, anchor-set) slice from M4 / M5 capture `.pt`
+files, persisting the top-k feature activations per (run, anchor).
+Also reports reconstruction quality (MSE / FVU) for Phase A's sanity
+check (A1) in the same pass.
+
+JumpReLU SAE math (per the Gemma Scope HF model card):
+    pre_acts    = x @ w_enc + b_enc
+    features    = pre_acts * (pre_acts > threshold)
+    recon       = features @ w_dec + b_dec
 
 Layer indexing convention. The capture `.pt` files store residuals at
 49 indices (1 embedding + 48 decoder-block outputs). Capture-index L is
@@ -15,14 +22,17 @@ of decoder block (i-1), i.e. resid_post[i-1]. For Gemma Scope 2's
 block N), feed capture-index N+1. The CLI takes the capture-index
 directly; `--block-id` is reported for sanity-check logging only.
 
-Output schema (torch.save'd list of dicts):
-  [
-    {"run_id": str, "class": str, "anchor": str,
-     "feature_idx": int32 tensor (k_active,),
-     "activation":  float32 tensor (k_active,),
-     "recon_mse": float, "input_norm_sq": float},
-    ...
-  ]
+Output schema (torch.save'd dict; records list, plus meta):
+  {
+    "records": [
+      {"run_id": str, "class": str, "anchor": str,
+       "feature_idx": int32 tensor (k_active,),
+       "activation":  float32 tensor (k_active,),
+       "recon_mse": float, "input_norm_sq": float},
+      ...
+    ],
+    "meta": {... including reconstruction stats and SAE config ...},
+  }
 """
 from __future__ import annotations
 
@@ -40,12 +50,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--residuals-dir", required=True,
                    help="Output dir of capture_positional_residuals.py "
                         "(per-run .pt files, anchor-labelled).")
-    p.add_argument("--sae-release", required=True,
-                   help="sae_lens release id, e.g. "
-                        "'google/gemma-scope-2-12b-it-res'.")
-    p.add_argument("--sae-id", required=True,
-                   help="sae_lens SAE id within the release, e.g. "
-                        "'layer_30/width_64k/average_l0_45'.")
+    p.add_argument("--hf-repo", required=True,
+                   help="HuggingFace repo id, e.g. "
+                        "'google/gemma-scope-2-12b-it'.")
+    p.add_argument("--hf-subfolder", required=True,
+                   help="Subfolder within the HF repo containing "
+                        "config.json + params.safetensors, e.g. "
+                        "'resid_post/layer_31_width_65k_l0_medium'.")
     p.add_argument("--capture-index", type=int, required=True,
                    help="Index into the 49-layer capture tensor "
                         "(= block_id + 1 for resid_post-after-block).")
@@ -74,10 +85,67 @@ def _resolve_device(arg: str) -> str:
     return arg
 
 
-def _load_sae(release: str, sae_id: str, device: str) -> tuple[object, dict]:
-    from sae_lens import SAE  # heavy import; defer until argparse done
-    sae, cfg_dict, _sparsity = SAE.from_pretrained(
-        release=release, sae_id=sae_id, device=device,
+class JumpReLUSAEModule(torch.nn.Module):
+    """Pure-torch JumpReLU SAE with weights loaded from a Gemma Scope 2
+    HuggingFace folder (config.json + params.safetensors).
+
+    Supports a `.encode()` and `.decode()` API analogous to sae-lens's
+    `SAE`, plus a `.d_in` / `.d_sae` attribute for shape checks.
+    """
+    def __init__(self, w_enc: torch.Tensor, b_enc: torch.Tensor,
+                 threshold: torch.Tensor, w_dec: torch.Tensor,
+                 b_dec: torch.Tensor) -> None:
+        super().__init__()
+        self.register_buffer("w_enc", w_enc)
+        self.register_buffer("b_enc", b_enc)
+        self.register_buffer("threshold", threshold)
+        self.register_buffer("w_dec", w_dec)
+        self.register_buffer("b_dec", b_dec)
+        self.d_in = int(w_enc.shape[0])
+        self.d_sae = int(w_enc.shape[1])
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        pre = x @ self.w_enc + self.b_enc
+        return pre * (pre > self.threshold).to(pre.dtype)
+
+    def decode(self, feats: torch.Tensor) -> torch.Tensor:
+        return feats @ self.w_dec + self.b_dec
+
+
+def _load_sae(hf_repo: str, hf_subfolder: str, device: str, dtype: torch.dtype
+              ) -> tuple[JumpReLUSAEModule, dict]:
+    """Download config.json + params.safetensors from a Gemma Scope 2
+    HF repo subfolder and instantiate a JumpReLUSAEModule.
+    """
+    from huggingface_hub import hf_hub_download
+    from safetensors.torch import load_file
+    import json as _json
+
+    cfg_path = hf_hub_download(
+        repo_id=hf_repo, filename=f"{hf_subfolder}/config.json",
+    )
+    params_path = hf_hub_download(
+        repo_id=hf_repo, filename=f"{hf_subfolder}/params.safetensors",
+    )
+    with open(cfg_path) as f:
+        cfg_dict = _json.load(f)
+    arch = cfg_dict.get("architecture")
+    if arch != "jump_relu":
+        raise NotImplementedError(
+            f"Only jump_relu SAEs supported; got architecture={arch}"
+        )
+    sd = load_file(params_path)
+    expected = {"w_enc", "b_enc", "threshold", "w_dec", "b_dec"}
+    missing = expected - set(sd.keys())
+    if missing:
+        raise RuntimeError(f"Missing tensor keys in params.safetensors: {missing}")
+
+    sae = JumpReLUSAEModule(
+        w_enc=sd["w_enc"].to(device=device, dtype=dtype),
+        b_enc=sd["b_enc"].to(device=device, dtype=dtype),
+        threshold=sd["threshold"].to(device=device, dtype=dtype),
+        w_dec=sd["w_dec"].to(device=device, dtype=dtype),
+        b_dec=sd["b_dec"].to(device=device, dtype=dtype),
     )
     sae.eval()
     return sae, cfg_dict
@@ -98,13 +166,14 @@ def main() -> int:
               f"resid_post SAEs.", file=sys.stderr)
 
     print(f"device={device} dtype={args.dtype}")
-    print(f"sae_release={args.sae_release} sae_id={args.sae_id}")
+    print(f"hf_repo={args.hf_repo} hf_subfolder={args.hf_subfolder}")
     print(f"capture_index={args.capture_index} (block_id="
           f"{args.capture_index - 1} for resid_post)")
-    sae, sae_cfg = _load_sae(args.sae_release, args.sae_id, device)
-    d_in = getattr(sae, "d_in", None) or sae_cfg.get("d_in")
-    d_sae = getattr(sae, "d_sae", None) or sae_cfg.get("d_sae")
-    print(f"loaded SAE d_in={d_in} d_sae={d_sae}")
+    sae, sae_cfg = _load_sae(args.hf_repo, args.hf_subfolder, device, dtype)
+    d_in = sae.d_in
+    d_sae = sae.d_sae
+    print(f"loaded JumpReLU SAE d_in={d_in} d_sae={d_sae} "
+          f"hook_in={sae_cfg.get('hf_hook_point_in')} l0={sae_cfg.get('l0')}")
 
     files = sorted(Path(args.residuals_dir).glob("*.pt"))
     files = [f for f in files if not f.name.endswith("_FAILED.pt")]
@@ -185,8 +254,9 @@ def main() -> int:
     payload = {
         "records": out_records,
         "meta": {
-            "sae_release": args.sae_release,
-            "sae_id": args.sae_id,
+            "hf_repo": args.hf_repo,
+            "hf_subfolder": args.hf_subfolder,
+            "sae_config": sae_cfg,
             "capture_index": args.capture_index,
             "block_id": args.block_id,
             "residuals_dir": str(Path(args.residuals_dir).resolve()),
