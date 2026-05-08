@@ -258,9 +258,15 @@ def main() -> int:
                 reason = ", ".join(k for k in debug if k.startswith("__DEBUG_"))
                 print(f"  [{i+1}/{len(manifests)}] {m.run_id} ({m.reveal_canonical_id}): "
                       f"ANCHOR FAILURE ({reason})", flush=True)
-                torch.save(data, out_dir / f"{m.run_id}_FAILED.pt")
+                torch.save(data, out_dir / f"{m.run_id}_FAILED.pt",
+                           _use_new_zipfile_serialization=False)
                 continue
-            torch.save(data, out_dir / f"{m.run_id}.pt")
+            # Lustre on TSUBAME has shown intermittent zip-archive
+            # corruption with the new (default) torch.save format
+            # ("inline_container.cc:664 unexpected pos X vs Y"). The
+            # legacy pickle-based format is more robust on this fs.
+            torch.save(data, out_dir / f"{m.run_id}.pt",
+                       _use_new_zipfile_serialization=False)
             if (i + 1) % 10 == 0 or i == len(manifests) - 1:
                 elapsed = time.time() - t0
                 rate = (i + 1) / elapsed
