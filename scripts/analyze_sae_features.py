@@ -151,9 +151,7 @@ def _loo_lr(X: np.ndarray, y: np.ndarray, C: float) -> dict:
     for i in range(n):
         mask = np.ones(n, dtype=bool)
         mask[i] = False
-        clf = LogisticRegression(
-            C=C, max_iter=2000, solver="lbfgs", multi_class="auto",
-        )
+        clf = LogisticRegression(C=C, max_iter=2000, solver="lbfgs")
         clf.fit(X[mask], y[mask])
         preds[i] = clf.predict(X[i:i+1])[0]
     acc = float((preds == y).mean())
