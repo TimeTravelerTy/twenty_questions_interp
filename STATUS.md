@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** **M4 closed** — improvisation hypothesis robust on every axis (D-42): prompt (5 12B variants: `default`, `commit_strong`, `internal_locus`, `introspection_aware`, `lipsum_filler`), scale (12B → 27B), attractor (mutable identity, stable mechanism). End_ready is at chance, mid-layer cross-class diff ~0, rank-1 at L30 is generic-prior dominated, in **all 6 conditions**. Flip-text behavioral evidence is **deprioritized** to illustrative — confabulation can produce the same flip-text fingerprint, so the load-bearing evidence is residual+lens (patching null, end_ready probe, cross-class baseline, rank check). **Next milestone:** M5 — SAE / transcoder feature case studies on the late-network (L30 → L48) dialogue-integration step.
+**Current milestone:** **M5 in flight** — SAE / transcoder feature case studies on the late-network (L30 → L48) dialogue-integration step. Plan: `~/.claude/plans/check-the-latest-status-bright-horizon.md`. Scope locked to Phase A (decomposition + constraint accumulation analysis) + B1 (single-feature steering at `pre_answer_q4`); B2/B3 deferred to M5b. Headline test: does any single SAE feature carry a causal handle that residual patching missed (vs. the 0/2280 residual null)? Predicted findings preregistered in plan.
 **Last agent:** Claude
-**Last updated:** 2026-04-30 (lipsum_filler closes M4. Pipeline: collection job `7287532` (600 attempts, same `{cow, dog, elephant, horse}` attractor, top-1 share 43.0%, effective classes 3.13 — slightly *narrower* than default), positional capture job `7289545` (600 runs, 74s), lens analysis job `7290193` via new `scripts/analyze_positional_lens.py`. **L25 own-elevation 0.00, L30 own-elevation +0.39 logits** (within noise of default +0.30, ia +0.35), rank-1 at L30 = horse with **100% share across all 600 runs**, own_is_top_rate at L30 = 38% (just the base rate of own=horse). Generic-prior dominance pattern intact, no run-specific commitment. The "compute-starved commitment" reading is ruled out alongside the prompt-fragility and introspective-control readings. **Held back for user research-judgment on M5 scoping** — concrete first questions: which features encode yes/no constraint accumulation? which fire at the class-derivation step? are they shared across the 4-class attractor or class-specific?)
+**Last updated:** 2026-05-01 (M5 kicked off. Plan written. `capture_positional_residuals.py` extended to 16 anchors — adds four `pre_answer_qN` anchors at `end_user_qN + 4` (the `\n` after `<start_of_turn>model`, M3's turn-4 LR-0.79 peak position). Next: re-capture on TSUBAME against existing 600-run default 12B collection; then `scripts/sae_feature_firings.py` to load Gemma Scope 2 12b-it SAEs at L30/L40/L48 × {resid_post, mlp_out, attn_out}.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -106,38 +106,43 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step — Gemma 3 27B scale comparison.** The 12B M4
-narrative is methodologically clean (D-40 + D-41); user agreed (2)
-scale comparison precedes M5 SAE work. Pipeline:
+**Next concrete step — M5 Phase A: SAE/transcoder feature case studies on
+12B default-prompt captures.** M4 closed (improvisation hypothesis robust
+across prompt × scale × attractor). 27B scale comparison already in
+addendum 2026-04-30. M5 plan in `~/.claude/plans/check-the-latest-status-bright-horizon.md`
+(Phase A + B1 only; B2/B3 deferred to M5b). Research framing: do sparse
+features expose interpretable structure inside the L30 → L48 dialogue-
+integration step that linear probes obscure, and does any feature carry a
+causal handle that residual patching missed (vs. the 0/2280 residual null)?
 
-1. **Submit a self-chosen 20-bank collection on `gemma-3-27b-it`.**
-   Need to verify HF gating + storage budget on TSUBAME first. Same
-   default-prompt 4-question panel as 12B for direct comparability.
-   Quota target: 20 runs/class for the realized attractor classes.
-   At 12B the realized set was `{cow, dog, elephant, horse}`; 27B may
-   shift the attractor (D-34's `less_obvious` variant already showed
-   prompt-sensitive attractor at 12B). Run with `--stop-when-n-classes-
-   hit-quota` similar to the 12B scale-up. ~hours walltime since 27B
-   is ~2.25× slower than 12B per token.
-2. **Re-run capture_positional_residuals.py** on the 27B collection.
-3. **Re-run probe_positional_anchors.py** with `--n-per-class 20`.
-4. **Re-run flip_yesno_text.py with --logit-lens** on 27B.
+Pipeline:
 
-The scale-axis questions (per project_scale_question memory):
-- Does `end_ready` LR LOO climb above chance at 27B? -> Y means scale
-  induces residual-stream pre-commitment.
-- Do flip-text out-of-attractor rates decrease (more pre-commitment),
-  increase (more confident improvisation), or stay equal? -> Decrease
-  + above-chance end_ready would give us the strong "scale induces
-  commitment" claim.
-- Does lens-trajectory show a mid-network commitment bump at 27B
-  even if final-layer behavior is dialogue-respecting? -> Y would
-  surface a "stored commitment that scales overrides via late
-  layers" picture, structurally different from 12B's pure late-
-  integration.
+1. **A5: Re-capture with 16 anchors.** `capture_positional_residuals.py`
+   now adds four `pre_answer_qN` anchors (4 tokens past `end_user_qN`,
+   the `\n` after `<start_of_turn>model` — M3's turn-4 LR-0.79 peak
+   position). qsub against the existing 600-run default 12B collection
+   on TSUBAME. Output: `runs/positional_residuals/12b_default_n80_v2/`
+   (~6 MB/run × 600 = 3.6 GB). Cheap (~minutes walltime).
+2. **A1–A2: Load Gemma Scope 2 12b-it SAEs and encode captured residuals.**
+   New script `scripts/sae_feature_firings.py`. Cherry-pick start: L30 /
+   L40 / L48 × {resid_post, mlp_out, attn_out} = 9 SAE loads, width 64k,
+   medium L0 (30–60). Persist top-k=64 per (run, anchor, layer) as
+   sparse `(feature_idx, activation)` pairs. Sanity check: SAE
+   reconstruction MSE within Gemma Scope 2's published bounds on a
+   50-run held-out subset.
+3. **A3: Three feature-axis analyses** (class-discriminative,
+   turn-progressive, yes/no-conditional) + **A4 reproducibility check**
+   (sparse classifier vs. residual probe LR LOO at L30 `pre_answer_q4`)
+   + **A4b calibration-attribute pickup** (do M3 calibration's six
+   binary-attribute decoders correspond to single SAE features, or to
+   distributed combinations?).
+4. **B1 (gated on A producing ≥3 candidate features):** single-feature
+   ablate-to-zero / set-to-target-class-mean steering at `pre_answer_q4`
+   L30 and L40. Headline test: any flip rate r > 0/80 vs. the residual
+   patching null. Reuses `patch_turn4.py:349` hooking pattern.
 
-Each outcome is publishable. Same pipeline; only the model name
-changes.
+Predicted findings (preregistration-style) in the plan file. Headline
+write-up: `docs/progress/M5-sae-features-12b-default-n80.md`.
 
 **Side investigations still pending (non-blocking):**
 - `attempt_588`/`206`/`038`/`049` baseline non-determinism (~4%).

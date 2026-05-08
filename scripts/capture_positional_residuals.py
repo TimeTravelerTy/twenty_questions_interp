@@ -1,32 +1,35 @@
-"""M4 phase 2c-iii — Positional residual capture across structural anchors.
+"""M4 phase 2c-iii / M5 — Positional residual capture across structural anchors.
 
 For each kept run in a self-chosen collection, rebuild the FULL prefix
 (system + Ready + 4 turns + reveal user message + add_generation_prompt)
 and do one forward pass with `output_hidden_states=True`. Capture the
-residual stream at ~12 structural anchor positions tied to chat-template
+residual stream at 16 structural anchor positions tied to chat-template
 role boundaries:
 
   end_user_prompt    — end of the combined system+user opening
   end_ready          — end of the model's "Ready" turn
   end_user_qN        — end of turn N's user question      (N=1..4)
+  pre_answer_qN      — 4 tokens into the model-answer scaffolding (N=1..4)
+                       (the `\\n` after `<start_of_turn>model`; M3's
+                       turn-4 LR-0.79 peak position)
   end_model_qN       — end of turn N's model yes/no answer (N=1..4)
   end_reveal_user    — end of the reveal user message
   pre_reveal_gen     — last position (just before reveal generation)
 
 Output: one `.pt` file per run with the full anchor-positions tensor of
-shape (K_anchors, n_layers+1, hidden_dim), plus role-position metadata.
+shape (K_anchors=16, n_layers+1, hidden_dim), plus role-position metadata.
 
 The saved residuals support a probe-fitting analysis (per anchor × layer
-LR LOO accuracy) and serve as the steering-vector ingredients for the
-followup phase 2d (patch only along class-discriminating direction).
+LR LOO accuracy) and serve as the activation source for SAE / transcoder
+feature analysis (M5).
 
 Notes:
 - Different runs may have different seq_len because turn-N questions
   vary in length. Anchor labels are the alignment unit, not positions.
 - We capture *all* layers (49 = 1 embedding + 48 decoder blocks). One
   full prefix forward pass per run costs ~few seconds on a 12B model.
-- Storage budget: 12 anchors × 49 layers × 3840 hidden × 2 bytes ~= 4.5
-  MB / run × 80 runs ~= 360 MB total.
+- Storage budget: 16 anchors × 49 layers × 3840 hidden × 2 bytes ~= 6.0
+  MB / run × 600 runs ~= 3.6 GB total.
 """
 from __future__ import annotations
 
@@ -119,28 +122,68 @@ ANCHOR_LABELS_AT_EOT = [
 def _find_anchors(
     tokenizer: Any, input_ids: torch.Tensor
 ) -> dict[str, int]:
-    """Return a {label: position_index} dict.
+    """Return a {label: position_index} dict in chat-template structural order.
 
     Looks for `<end_of_turn>` tokens in order; the count must match
-    ANCHOR_LABELS_AT_EOT or we abort with a diagnostic. The final
-    `pre_reveal_gen` anchor is the last position of input_ids
-    (the model is about to start generating the reveal there).
+    ANCHOR_LABELS_AT_EOT or we abort with a diagnostic. After tagging EOT
+    anchors, inserts four `pre_answer_qN` anchors at `end_user_qN + 4` —
+    the position of the `\\n` after `<start_of_turn>model` in Gemma 3's
+    chat template, which is the M3-measured turn-4 LR-0.79 peak position.
+    The final `pre_reveal_gen` anchor is the last position of input_ids.
     """
     eot_id = tokenizer.convert_tokens_to_ids("<end_of_turn>")
     if eot_id is None or eot_id == tokenizer.unk_token_id:
         raise RuntimeError("Tokenizer has no <end_of_turn> special token")
     ids = input_ids[0]
     eot_positions = (ids == eot_id).nonzero(as_tuple=True)[0].tolist()
+    seq_len = int(ids.shape[0])
 
-    anchors: dict[str, int] = {}
     if len(eot_positions) != len(ANCHOR_LABELS_AT_EOT):
         # Don't abort — record what we got so a debug pass can investigate.
-        anchors["__DEBUG_eot_positions__"] = eot_positions  # type: ignore
-        anchors["__DEBUG_expected__"] = len(ANCHOR_LABELS_AT_EOT)  # type: ignore
-        return anchors
-    for label, pos in zip(ANCHOR_LABELS_AT_EOT, eot_positions, strict=True):
-        anchors[label] = int(pos)
-    anchors["pre_reveal_gen"] = int(ids.shape[0] - 1)
+        return {
+            "__DEBUG_eot_positions__": eot_positions,  # type: ignore[dict-item]
+            "__DEBUG_expected__": len(ANCHOR_LABELS_AT_EOT),  # type: ignore[dict-item]
+        }
+
+    eot_by_label = dict(zip(ANCHOR_LABELS_AT_EOT, eot_positions, strict=True))
+
+    # Build anchors in chat-template structural order so iteration in
+    # downstream code reflects the dialogue timeline.
+    sot_id = tokenizer.convert_tokens_to_ids("<start_of_turn>")
+    has_sot = sot_id is not None and sot_id != tokenizer.unk_token_id
+
+    anchors: dict[str, int] = {}
+    anchors["end_user_prompt"] = int(eot_by_label["end_user_prompt"])
+    anchors["end_ready"] = int(eot_by_label["end_ready"])
+    for n in (1, 2, 3, 4):
+        eu = int(eot_by_label[f"end_user_q{n}"])
+        anchors[f"end_user_q{n}"] = eu
+        # 4 tokens past end_user_qN = the `\n` after `<start_of_turn>model`.
+        # Sanity-check via the next <start_of_turn> if available, else
+        # assume the canonical Gemma 3 layout (eu+1 = `\n`, eu+2 = SOT,
+        # eu+3 = `model`, eu+4 = `\n`).
+        pre_pos = eu + 4
+        em = int(eot_by_label[f"end_model_q{n}"])
+        if pre_pos >= em or pre_pos >= seq_len:
+            return {
+                "__DEBUG_pre_answer_overrun__": {
+                    "turn": n, "eu": eu, "pre_pos": pre_pos, "em": em,
+                    "seq_len": seq_len,
+                },
+            }
+        if has_sot:
+            sot_pos = eu + 2
+            if int(ids[sot_pos]) != sot_id:
+                return {
+                    "__DEBUG_sot_mismatch__": {
+                        "turn": n, "eu": eu, "sot_pos": sot_pos,
+                        "tok": int(ids[sot_pos]), "expected": sot_id,
+                    },
+                }
+        anchors[f"pre_answer_q{n}"] = pre_pos
+        anchors[f"end_model_q{n}"] = em
+    anchors["end_reveal_user"] = int(eot_by_label["end_reveal_user"])
+    anchors["pre_reveal_gen"] = seq_len - 1
     return anchors
 
 
@@ -153,7 +196,7 @@ def _capture_run(
 ) -> dict[str, Any]:
     inputs = _build_full_prefix_inputs(handle, manifest, bank, prompt_variant)
     anchors = _find_anchors(handle.tokenizer, inputs["input_ids"])
-    if "__DEBUG_eot_positions__" in anchors:
+    if any(k.startswith("__DEBUG_") for k in anchors):
         return {"failed_anchors": anchors, "input_ids": inputs["input_ids"][0].cpu()}
 
     outputs = handle.model(
@@ -211,9 +254,10 @@ def main() -> int:
             data = _capture_run(handle, m, bank, args.prompt_variant)
             if "failed_anchors" in data:
                 failed.append(m.run_id)
+                debug = data["failed_anchors"]
+                reason = ", ".join(k for k in debug if k.startswith("__DEBUG_"))
                 print(f"  [{i+1}/{len(manifests)}] {m.run_id} ({m.reveal_canonical_id}): "
-                      f"ANCHOR MISMATCH (got {len(data['failed_anchors'].get('__DEBUG_eot_positions__', []))} EOTs, "
-                      f"expected {data['failed_anchors'].get('__DEBUG_expected__')})", flush=True)
+                      f"ANCHOR FAILURE ({reason})", flush=True)
                 torch.save(data, out_dir / f"{m.run_id}_FAILED.pt")
                 continue
             torch.save(data, out_dir / f"{m.run_id}.pt")
