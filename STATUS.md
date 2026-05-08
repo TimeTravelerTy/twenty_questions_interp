@@ -3,9 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** **M5 in flight** — SAE / transcoder feature case studies on the late-network (L30 → L48) dialogue-integration step. Plan: `~/.claude/plans/check-the-latest-status-bright-horizon.md`. Scope locked to Phase A (decomposition + constraint accumulation analysis) + B1 (single-feature steering at `pre_answer_q4`); B2/B3 deferred to M5b. Headline test: does any single SAE feature carry a causal handle that residual patching missed (vs. the 0/2280 residual null)? Predicted findings preregistered in plan.
+**Current milestone:** **M5 Phase A first cut in (L31, pre_answer_q4, resid_post 65k medium-L0)** — A1 sanity passes (FVU 1.68%) and a striking sparsity pattern is visible (88 unique features fire across all 600 runs; per-run L0 ~60), with the dominant class-discriminative axis being **horse-asymmetric**, matching the M4 lens generic-prior result. **A4 AxBench check fails** at this single (anchor, layer): sparse classifier balanced 20/class LR LOO = **0.3125** vs M3 residual probe LR LOO **0.79** at the same position (gap = 0.48, far outside the ±0.05 reproducibility threshold). The residual's 4-way class direction is *not* aligned with the SAE's sparse-feature basis at L31. Plan: `~/.claude/plans/check-the-latest-status-bright-horizon.md`. Scope: Phase A + B1 only; B2/B3 deferred to M5b.
 **Last agent:** Claude
-**Last updated:** 2026-05-01 (M5 kicked off. Plan written. `capture_positional_residuals.py` extended to 16 anchors — adds four `pre_answer_qN` anchors at `end_user_qN + 4` (the `\n` after `<start_of_turn>model`, M3's turn-4 LR-0.79 peak position). Next: re-capture on TSUBAME against existing 600-run default 12B collection; then `scripts/sae_feature_firings.py` to load Gemma Scope 2 12b-it SAEs at L30/L40/L48 × {resid_post, mlp_out, attn_out}.)
+**Last updated:** 2026-05-09 (M5 Phase A first cut shipped. Captures: `runs/positional_residuals/12b_default_n80_v2/` (600 × 16 anchors). Firings: `runs/m5_sae_firings_12b_default_resid_post_L31_pre_answer_q4.pt`. Analysis: `runs/m5_sae_analysis_..._balanced.json` (LR LOO 0.3125 / 600-pool 0.54). Loaded Gemma Scope 2 12b-it directly from HF (sae-lens 6.30.1's pretrained dir does not yet wire it in); JumpReLU SAE math implemented in 5 lines of torch via `JumpReLUSAEModule` in `scripts/sae_feature_firings.py`. Capture script switched to legacy torch.save format on Lustre (zip-archive corruption was actually masquerading EDQUOT). HF cache moved to `/gs/bs/tga-sip_arase/tyrone/.cache/huggingface` per user direction (40 PB bulk fs vs constrained `/gs/fs`).)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -106,14 +106,29 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step — M5 Phase A: SAE/transcoder feature case studies on
-12B default-prompt captures.** M4 closed (improvisation hypothesis robust
-across prompt × scale × attractor). 27B scale comparison already in
-addendum 2026-04-30. M5 plan in `~/.claude/plans/check-the-latest-status-bright-horizon.md`
-(Phase A + B1 only; B2/B3 deferred to M5b). Research framing: do sparse
-features expose interpretable structure inside the L30 → L48 dialogue-
-integration step that linear probes obscure, and does any feature carry a
-causal handle that residual patching missed (vs. the 0/2280 residual null)?
+**Next concrete step — M5 Phase A second cut at L41, plus turn-progressive
+encoding.** L31 first cut shows the AxBench warning: SAE features
+recapitulate a horse-asymmetric pattern (matching M4 lens) but **fail
+A4 reproducibility** (sparse LR LOO 0.31 vs residual LR LOO 0.79 at the
+balanced 20/class condition). Two follow-ups before deciding whether
+Phase B1 is worth running:
+
+1. **L41 encoding + analysis** (Gemma Scope 2's deepest fixed-depth
+   layer at 85% depth — closer to the L40-48 "monotonically growing"
+   band M4 found, possibly less generic-prior contaminated than L31).
+   Same script, swap `--hf-subfolder resid_post/layer_41_width_65k_l0_medium`
+   and `--capture-index 42 --block-id 41`.
+2. **Turn-progressive encoding** at L31 across all four pre_answer_qN
+   anchors. The 600-run capture already has them; encode once per
+   anchor and aggregate. This answers Phase A3.2 directly: do features
+   form monotonically across q1 → q4? Independent of A4's classifier
+   result.
+
+If L41 also fails A4 ≥ 0.05 of residual probe, Phase B1 is unlikely to
+land a positive — recommend pivoting to A4b (calibration-attribute
+pickup, via M3 calibration runs) as the cleanest decomposition story
+that doesn't depend on the imbalanced 4-way class direction being
+sparse-feature-aligned.
 
 Pipeline:
 
