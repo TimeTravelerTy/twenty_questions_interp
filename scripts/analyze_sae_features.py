@@ -48,16 +48,27 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr-c", type=float, default=1.0,
                    help="LogisticRegression C parameter for the sparse "
                         "classifier.")
+    p.add_argument("--balance", type=int, default=None,
+                   help="If set, randomly subsample N runs per class for "
+                        "the analysis (apples-to-apples with M3's "
+                        "balanced 20/class LR LOO).")
+    p.add_argument("--seed", type=int, default=0,
+                   help="RNG seed for --balance subsampling.")
     p.add_argument("--out", required=True, help="Output JSON path.")
     return p.parse_args()
 
 
-def _build_sparse_matrix(records: list[dict], anchor: str | None) -> tuple[
-    np.ndarray, list[str], np.ndarray, list[str], int
+def _build_sparse_matrix(records: list[dict], anchor: str | None,
+                         balance: int | None = None, seed: int = 0
+                         ) -> tuple[
+    np.ndarray, list[str], np.ndarray, list[str], int, list[int]
 ]:
     """Build a dense (n_runs, d_sae_active) feature matrix from sparse
     top-k records, plus a global feature-id list (only features that
     fire in at least one run) and a class array.
+
+    If `balance` is set, randomly subsample `balance` runs per class
+    (deterministic in `seed`) to produce a balanced K-way pool.
 
     Returns (X, class_names, classes_idx, run_ids, d_sae_observed_max).
     """
@@ -65,6 +76,21 @@ def _build_sparse_matrix(records: list[dict], anchor: str | None) -> tuple[
         records = [r for r in records if r["anchor"] == anchor]
     if not records:
         raise SystemExit("No records left after anchor filter")
+    if balance is not None:
+        rng = np.random.default_rng(seed)
+        by_class: dict[str, list] = {}
+        for r in records:
+            by_class.setdefault(str(r["class"]), []).append(r)
+        balanced: list = []
+        for cls, items in sorted(by_class.items()):
+            if len(items) < balance:
+                raise SystemExit(
+                    f"Class {cls!r} has only {len(items)} records, "
+                    f"cannot --balance to {balance}"
+                )
+            order = rng.permutation(len(items))
+            balanced.extend(items[i] for i in order[:balance])
+        records = balanced
 
     feat_set: set[int] = set()
     for r in records:
@@ -89,7 +115,7 @@ def _build_sparse_matrix(records: list[dict], anchor: str | None) -> tuple[
     name_to_idx = {n: k for k, n in enumerate(class_names)}
     y = np.array([name_to_idx[c] for c in classes_str], dtype=np.int64)
     max_seen = max(feat_ids) + 1 if feat_ids else 0
-    return X, class_names, y, run_ids, max_seen
+    return X, class_names, y, run_ids, max_seen, feat_ids
 
 
 def _per_feature_anova(X: np.ndarray, y: np.ndarray, class_names: list[str]
@@ -173,8 +199,8 @@ def main() -> int:
     if args.anchor:
         print(f"Filtering to anchor={args.anchor}")
 
-    X, class_names, y, run_ids, d_sae_observed = _build_sparse_matrix(
-        records, anchor=args.anchor,
+    X, class_names, y, run_ids, d_sae_observed, feat_ids = _build_sparse_matrix(
+        records, anchor=args.anchor, balance=args.balance, seed=args.seed,
     )
     print(f"Built feature matrix: shape={X.shape}, "
           f"classes={class_names}, n_per_class={[int((y==k).sum()) for k in range(len(class_names))]}")
@@ -185,8 +211,6 @@ def main() -> int:
     feat_stats.sort(key=lambda d: d["F"], reverse=True)
     top = feat_stats[: args.top_n]
 
-    feat_ids = sorted({int(i) for r in records
-                       for i in (r["feature_idx"].tolist() if args.anchor is None or r["anchor"] == args.anchor else [])})
     feat_id_by_col = {j: feat_ids[j] for j in range(len(feat_ids))}
 
     print(f"\nTop-{args.top_n} class-discriminative SAE features at "
