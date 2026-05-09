@@ -3,9 +3,28 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** **M5 Phase A3.2 turn-progressive done at L31 — flat-and-disjoint, strengthening the SAE-misalignment read.** Encoded all four `pre_answer_q1..q4` anchors at L31 in one pass (job 7341889, 11s wall, 2400 firings, FVU 1.56%). Per-anchor balanced 20/class LR LOO: q1 **0.325**, q2 **0.325**, q3 **0.212**, q4 **0.312** — all near chance (0.25), nowhere near the M3 residual probe's 0.79. Active feature count per turn is roughly flat (89/78/90/80), so neither narrowing nor monotonic aggregation. **Top-10 class-discriminative features have zero overlap across turns** (q1∩q2=q2∩q3=q3∩q4=1; q1∩q3=q1∩q4=q2∩q4=0; all-4 intersection = ∅). Even in top-30, no q4-top-10 feature survives at every turn; the q4 horse-asymmetric feature 9024 only appears in q1's top-30. Read: at L31 the SAE basis is **not stably class-aligned at any turn** — class info at this layer is residual-distributed, not sparse-feature-encoded. A confound to flag: pre_answer_q1 vs pre_answer_q4 sit at very different absolute sequence positions, so the SAE may be lighting up turn/position features rather than class features, which is itself consistent with what we see. Phase A first cut at L31/q4 (commit 52cd9ce): A4 fails by 0.48 (sparse 0.31 vs residual 0.79). **Next: L41 second cut + decision gate** — if L41 also fails A4 ≥ 0.05 of residual, declare the SAE-retrieval story negative at default Gemma Scope 2 layers and pivot to (a) writing the negative + (b) scale comparison at 27B. Plan: `~/.claude/plans/check-the-latest-status-bright-horizon.md`. Scope: Phase A + B1 only; B2/B3 deferred to M5b.
+**Current milestone:** **M5 Phase A decision gate triggered: SAE-retrieval is negative at L31 AND L41 across all turns. Pivoting to (a) negative-result writeup + (b) 27B scale comparison.** Both Gemma Scope 2 12b-it resid_post fixed-depth layers we tested (L31 medium-L0, L41 medium-L0) fail A4 at every pre_answer_qN anchor and show no stable cross-turn class axis.
+
+Side-by-side, balanced 20/class LR LOO (chance 0.25; M3 residual probe at L31/q4 = 0.79):
+
+| anchor | L31 sparse LR | L31 active feats | L41 sparse LR | L41 active feats |
+|---|---|---|---|---|
+| pre_answer_q1 | 0.325 | 89 | 0.287 | 54 |
+| pre_answer_q2 | 0.325 | 78 | 0.287 | 62 |
+| pre_answer_q3 | 0.212 | 90 | 0.275 | 97 |
+| pre_answer_q4 | 0.312 | 80 | 0.325 | 51 |
+
+Top-10 cross-turn intersection is **∅** at both layers (only adjacent turns ever share even one feature). Read: at default Gemma Scope 2 layers, the self-chosen class direction the M3 linear probe finds is **residual-distributed, not sparsely encoded**, and what little signal the SAE picks up is turn/position-specific rather than class-specific.
+
+Phase A first cut at L31/q4 (commit 52cd9ce): A4 fails by 0.48. Phase A3.2 turn-progressive at L31 (commit 8b1acf0) and L41 second cut (this commit): both fail at every turn.
+
+**Next: stop M5 expansion at default layers and pivot.** Two parallel tracks:
+1. **Write up the negative as a finding.** `docs/progress/M5-sae-residual-misaligned-12b-L31-L41.md`. The finding is itself blog-post-shaped: "12B encodes self-chosen class info linearly in the residual but not sparsely in default Gemma Scope 2 features at L31/L41" — strengthens the M4 "improvisation, not retrieval" story.
+2. **27B scale comparison** (project_scale_question.md). Re-run the M3 positional probe + M4 patching at end_ready and turn-4 pre_answer on Gemma 3 27B. The headline question that flips from "12B improvises" to "scale shifts to retrieval" needs (a) Ready-position LR LOO above chance AND (b) Ready-position patches causally moving reveals. Either alone is partial.
+
+Plan: `~/.claude/plans/check-the-latest-status-bright-horizon.md`. Scope deferred: Phase B1 steering (no candidate features), B2/B3 (M5b), `mlp_out`/`attn_out` SAEs at L31/L41 (would tell us about per-component sparsity but doesn't change the residual-stream story).
 **Last agent:** Claude
-**Last updated:** 2026-05-09 (M5 Phase A3.2 turn-progressive shipped. Firings: `runs/m5_sae_firings_12b_default_resid_post_L31_pre_answer_q1q2q3q4.pt` (2400 records, FVU 1.56%). Per-anchor analyses: `runs/m5_sae_analysis_12b_default_resid_post_L31_pre_answer_q[1234]_balanced.json`. Aggregator output: `runs/m5_sae_turn_progressive_L31_balanced.json`. Aggregation script: `scripts/aggregate_sae_turn_progressive.py`. TSUBAME jobs: `tq_m5_sae_firings_12b_default_L31_pa1234_20260509.sh` (7341889), `tq_m5_analyze_sae_L31_pa1234_balanced_20260509.sh` (7341891).)
+**Last updated:** 2026-05-09 (M5 Phase A L41 second cut shipped. L31 firings/analyses already on disk; L41 firings: `runs/m5_sae_firings_12b_default_resid_post_L41_pre_answer_q1q2q3q4.pt` (2400 records, FVU 2.30%). Per-anchor: `runs/m5_sae_analysis_12b_default_resid_post_L41_pre_answer_q[1234]_balanced.json`. Aggregator outputs: `runs/m5_sae_turn_progressive_L31_balanced.json`, `runs/m5_sae_turn_progressive_L41_balanced.json`. TSUBAME jobs: `tq_m5_sae_firings_12b_default_L41_pa1234_20260509.sh` (7342179), `tq_m5_analyze_sae_L41_pa1234_balanced_20260509.sh` (7342191).)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
@@ -106,36 +125,51 @@ candidate identity is linearly available from ~1/4 depth, but class clusters are
 not spherical until much deeper. Transfer, however, is now the decisive result:
 see `docs/progress/M3-12b-selfchosen-transfer.md`.
 
-**Next concrete step — M5 Phase A second cut at L41 (decision gate).**
-Turn-progressive at L31 (this commit) returned a hard negative: LR LOO
-flat at chance across all four pre_answer_qN anchors AND zero stable
-top-feature overlap across turns. The class direction at L31 simply is
-not in the SAE basis. The remaining open question is whether this
-generalises to deeper layers in the L27-48 M3 LR band, or is L31-specific.
+**Next concrete step — write the M5 negative + spin up 27B capture.**
 
-Run L41 (Gemma Scope 2's deepest fixed-depth layer, 85% depth, closer to
-the M4-identified L40-48 monotonic-growth band):
-- Reuse `jobs/tq_m5_sae_firings_12b_default_L31_pa1234_20260509.sh` as a
-  template; swap `--hf-subfolder resid_post/layer_41_width_65k_l0_medium`,
-  `--capture-index 42 --block-id 41`, and the output filename to
-  `..._L41_pre_answer_q1q2q3q4.pt`.
-- Run the same balanced-20/class analysis per-anchor and the aggregator.
+L41 second cut returned the same hard negative as L31. Decision gate
+fired: SAE-retrieval at default Gemma Scope 2 12b-it layers is dead.
+The two parallel tracks:
 
-**Decision gate after L41:**
-- **If L41 sparse LR LOO ≥ 0.7 × residual probe LR LOO at any anchor:**
-  the misalignment is layer-specific. Run B1 single-feature ablate /
-  steer at L41 on the top-F features.
-- **If L41 also fails (sparse LR LOO < residual − 0.05 at every anchor)
-  AND top-feature overlap stays low across turns:** SAE-retrieval is
-  dead at Gemma Scope 2's default 12b-it layers. Stop M5 there; write
-  the negative as an interesting finding ("12B self-chosen class is
-  decodable from the residual stream but not sparsely encoded by
-  Gemma Scope 2 SAEs at L31 or L41") and pivot to **scale comparison
-  at 27B** (project_scale_question.md): does end_ready LR LOO climb
-  above chance, and does the slope shape change?
+**(a) Negative writeup.** New file
+`docs/progress/M5-sae-residual-misaligned-12b-L31-L41.md`. Skeleton:
+- The question (Phase A: do M3's linear-probe class directions decompose
+  into sparse SAE features?).
+- The result (no, at L31 OR L41, at any pre_answer_qN anchor).
+- The mechanics (turn/position-specific top-features, zero cross-turn
+  intersection, sparse LR LOO ~ chance vs residual LR 0.79).
+- Why this is interesting, not just a method failure: it sharpens M4's
+  "improvisation, not retrieval" claim — the model's class commitment
+  is held *only* as a small linear component of a dense residual, not
+  as one (or even a stable handful of) interpretable features.
+- Caveats (only resid_post tested; only 2 layers from a 49-block
+  model; only `medium` L0 width; possible Gemma Scope 2 SAE
+  training-distribution mismatch).
+- Tables: from `runs/m5_sae_turn_progressive_L31_balanced.json` and
+  `runs/m5_sae_turn_progressive_L41_balanced.json`.
 
-Skip A4b (calibration-attribute pickup). It pulls the story toward
-calibration, which the north star says we don't headline.
+**(b) 27B scale capture.** Reuse the M3 positional capture pipeline at
+27B. Per project_scale_question.md, the discriminating observable is
+**end_ready LR LOO**: at 12B it sits at ~chance (model improvises);
+if 27B clears chance, scale grants explicit pre-commitment, and the
+follow-up patch test tells us if it's load-bearing or just legible.
+
+Pipeline:
+1. Run `capture_positional_residuals.py` against Gemma 3 27B with the
+   six-question matched panel + 20-bank prompt. Walltime ≈ 4-6× the
+   12B job (n=80 needs an A100 80GB, possibly multi-GPU). Aim for
+   a 4-class balanced (20/class) collection at the same anchors
+   the 12B v2 capture used.
+2. M3-style positional probe: balanced LR LOO at end_ready, turn-1..4
+   boundaries, turn-4 pre_answer.
+3. If end_ready LR LOO > 0.40 (≥1.6× chance): run the M4 patching
+   sweep at end_ready on a flip-vs-null target.
+4. If end_ready stays at chance: improvisation is scale-robust; that's
+   the headline result.
+
+Skip A4b (pulls toward calibration, which the north star says we
+don't headline) and `mlp_out`/`attn_out` SAEs at 12B (same residual
+target, won't change the negative).
 
 Pipeline:
 
