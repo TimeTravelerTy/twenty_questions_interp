@@ -61,12 +61,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--include-class", action="store_true",
                    help="Also compute 4-way class LR LOO at each "
                         "(anchor, layer) cell for reference.")
-    p.add_argument("--bank-questions",
-                   default="data/questions.yaml",
-                   help="Path to questions YAML (for Bank).")
-    p.add_argument("--bank-answers",
-                   default="data/answers.csv",
-                   help="Path to answers CSV (for Bank).")
     return p.parse_args()
 
 
@@ -76,7 +70,7 @@ def main() -> int:
     out_path = Path(args.out).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    bank = load_bank(args.bank_questions, args.bank_answers)
+    bank = load_bank()
     attr_ids = [s.strip() for s in args.attributes.split(",") if s.strip()]
     class_allow = [s.strip() for s in args.classes.split(",") if s.strip()]
     for cid in class_allow:
