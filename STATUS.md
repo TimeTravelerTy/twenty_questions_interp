@@ -3,7 +3,9 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** **M5 Phase A decision gate triggered: SAE-retrieval is negative at L31 AND L41 across all turns. Pivoting to (a) negative-result writeup + (b) 27B scale comparison.** Both Gemma Scope 2 12b-it resid_post fixed-depth layers we tested (L31 medium-L0, L41 medium-L0) fail A4 at every pre_answer_qN anchor and show no stable cross-turn class axis.
+**Current milestone:** **M5 attribute-bundle probe surfaces class-specific emergence ordering — dog at `pre_answer_q1`, the other three only at turn-4.** Direct-fit per-attribute binary LR LOO on the 12B v2 self-chosen capture (n=80 balanced over {cow, dog, elephant, horse}, 6 matched attributes, 16 anchors × 49 layers × 6 attrs = 4704 fits, cpu_40 2.7 h, job 7360344). The 6 attributes are 1v3 splits in this subset (baseline 0.75), collapsing to four "is X?" axes. End_ready is at/below baseline for every axis (0.657–0.673 late-band L27-48 mean). **pre_answer_q1 already clears is_dog (0.801); is_elephant/is_cow/is_horse only clear baseline at end_user_q4 / pre_answer_q4 (0.835–0.885)**. The improvisation claim hardens and sharpens: 12B is not making one decision at one moment, it is resolving uncertainty progressively in a **class-asymmetric** order, with the dominant-prior class (dog) crystallising first. Writeup: `docs/progress/M5-attribute-bundle-12b-default-v2.md`.
+
+**M5 Phase A SAE-retrieval status (prior):** decision gate triggered at L31 AND L41. Both Gemma Scope 2 12b-it resid_post fixed-depth layers we tested (L31 medium-L0, L41 medium-L0) fail A4 at every pre_answer_qN anchor and show no stable cross-turn class axis.
 
 Side-by-side, balanced 20/class LR LOO (chance 0.25; M3 residual probe at L31/q4 = 0.79):
 
