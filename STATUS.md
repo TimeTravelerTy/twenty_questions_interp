@@ -3,9 +3,14 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** **M5 attribute-bundle probe surfaces class-specific emergence ordering — dog at `pre_answer_q1`, the other three only at turn-4.** Direct-fit per-attribute binary LR LOO on the 12B v2 self-chosen capture (n=80 balanced over {cow, dog, elephant, horse}, 6 matched attributes, 16 anchors × 49 layers × 6 attrs = 4704 fits, cpu_40 2.7 h, job 7360344). The 6 attributes are 1v3 splits in this subset (baseline 0.75), collapsing to four "is X?" axes. End_ready is at/below baseline for every axis (0.657–0.673 late-band L27-48 mean). **pre_answer_q1 already clears is_dog (0.801); is_elephant/is_cow/is_horse only clear baseline at end_user_q4 / pre_answer_q4 (0.835–0.885)**. The improvisation claim hardens and sharpens: 12B is not making one decision at one moment, it is resolving uncertainty progressively in a **class-asymmetric** order, with the dominant-prior class (dog) crystallising first. Writeup: `docs/progress/M5-attribute-bundle-12b-default-v2.md`.
+**Current milestone:** **M5 pivot shipped + 27B scale comparison in flight.** Two things landed today (2026-05-17):
 
-**M5 Phase A SAE-retrieval status (prior):** decision gate triggered at L31 AND L41. Both Gemma Scope 2 12b-it resid_post fixed-depth layers we tested (L31 medium-L0, L41 medium-L0) fail A4 at every pre_answer_qN anchor and show no stable cross-turn class axis.
+1. **SAE-negative writeup published.** `docs/progress/M5-sae-residual-misaligned-12b-L31-L41.md` — the L31 + L41 default-Gemma-Scope-2 negative is now a load-bearing finding, not a method failure: residual LR 0.79 → sparse LR 0.21–0.33 at every `pre_answer_qN`, zero-feature all-four-turn intersection in the top-10 class-discriminative set at both layers. Sharpens the M4 improvisation claim from "causally inert" to "structurally distributed + dialogue-progressive + class-asymmetric" once combined with the prior attribute-bundle finding.
+2. **27B scale capture shipped.** `runs/positional_residuals/27b_default_n80_v2/` — 600 runs × 16 anchors × 63 layers × 5376-d in bf16 (13 GB on /gs/bs HDD; the entire `runs/` tree is now symlinked from /gs/fs → /gs/bs to relieve Lustre SSD pressure). Capture job **7566164** (gpu_1, 69.2 s wall, K=16 ✓). Probe job **7568083** (cpu_40, 6 h wall) is **in flight** as of submit — writes `runs/m5_positional_probe_27b_default_v2_n120.json` + `_centroids.pt` on success.
+
+**Prior 12B M5 attribute-bundle (still locked):** dog clears `pre_answer_q1` (0.801, baseline 0.75); cow/elephant/horse only clear baseline at turn-4 (0.835–0.885). Writeup: `docs/progress/M5-attribute-bundle-12b-default-v2.md`.
+
+**Prior M5 Phase A SAE-retrieval status:** decision gate triggered at L31 AND L41. Both Gemma Scope 2 12b-it resid_post fixed-depth layers we tested fail A4 at every pre_answer_qN anchor and show no stable cross-turn class axis.
 
 Side-by-side, balanced 20/class LR LOO (chance 0.25; M3 residual probe at L31/q4 = 0.79):
 
@@ -20,13 +25,13 @@ Top-10 cross-turn intersection is **∅** at both layers (only adjacent turns ev
 
 Phase A first cut at L31/q4 (commit 52cd9ce): A4 fails by 0.48. Phase A3.2 turn-progressive at L31 (commit 8b1acf0) and L41 second cut (this commit): both fail at every turn.
 
-**Next: stop M5 expansion at default layers and pivot.** Two parallel tracks:
-1. **Write up the negative as a finding.** `docs/progress/M5-sae-residual-misaligned-12b-L31-L41.md`. The finding is itself blog-post-shaped: "12B encodes self-chosen class info linearly in the residual but not sparsely in default Gemma Scope 2 features at L31/L41" — strengthens the M4 "improvisation, not retrieval" story.
-2. **27B scale comparison** (project_scale_question.md). Re-run the M3 positional probe + M4 patching at end_ready and turn-4 pre_answer on Gemma 3 27B. The headline question that flips from "12B improvises" to "scale shifts to retrieval" needs (a) Ready-position LR LOO above chance AND (b) Ready-position patches causally moving reveals. Either alone is partial.
+**Next: wait on probe 7568083, then branch on `end_ready` LR LOO at 27B.**
+- If end_ready clears chance (≥0.30 in late band, ≥0.40 anywhere): scale grants explicit pre-commitment. Re-run the M4 single-position patch sweep at the 27B end_ready peak layer (cpu/gpu TBD on observed peak layer) — the "retrieval at scale" headline requires both legibility AND causal load-bearing.
+- If end_ready stays at chance: improvisation is scale-robust. That **is** the headline; ship a `docs/progress/M5-scale-improvisation-12b-vs-27b.md` writeup pairing the 12B M3/M4 results with the 27B null and call M5 done at decomposition + scale-invariance.
 
-Plan: `~/.claude/plans/check-the-latest-status-bright-horizon.md`. Scope deferred: Phase B1 steering (no candidate features), B2/B3 (M5b), `mlp_out`/`attn_out` SAEs at L31/L41 (would tell us about per-component sparsity but doesn't change the residual-stream story).
+Plan: `~/.claude/plans/check-the-latest-status-bright-horizon.md`. Scope deferred (unchanged): Phase B1 steering (no candidate features), B2/B3 (M5b), `mlp_out`/`attn_out` SAEs at L31/L41 (would tell us about per-component sparsity but doesn't change the residual-stream story).
 **Last agent:** Claude
-**Last updated:** 2026-05-09 (M5 Phase A L41 second cut shipped. L31 firings/analyses already on disk; L41 firings: `runs/m5_sae_firings_12b_default_resid_post_L41_pre_answer_q1q2q3q4.pt` (2400 records, FVU 2.30%). Per-anchor: `runs/m5_sae_analysis_12b_default_resid_post_L41_pre_answer_q[1234]_balanced.json`. Aggregator outputs: `runs/m5_sae_turn_progressive_L31_balanced.json`, `runs/m5_sae_turn_progressive_L41_balanced.json`. TSUBAME jobs: `tq_m5_sae_firings_12b_default_L41_pa1234_20260509.sh` (7342179), `tq_m5_analyze_sae_L41_pa1234_balanced_20260509.sh` (7342191).)
+**Last updated:** 2026-05-17 (M5 pivot shipped: SAE-negative writeup + 27B v2 capture done in one session; 27B probe job 7568083 in flight. Capture job 7566164: gpu_1, 69.2 s wall, 600 OK, output `runs/positional_residuals/27b_default_n80_v2/` (13 GB on /gs/bs). New job scripts: `jobs/tq_m5_capture_positional_27b_default_v2_20260517.sh`, `jobs/tq_m5_probe_positional_27b_v2_20260517.sh`. Storage note: `runs/` on /gs/fs is now a symlink to `/gs/bs/.../twenty_questions_interp/runs/` — large captures (positional residuals, SAE firings) live on HDD; transparent to all scripts.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
