@@ -54,9 +54,10 @@ Outcomes interpreted jointly:
 Continuous metric is `logit_diff_delta = logit[src] - logit[tgt]` patched minus baseline; categorical metric is reveal first-token argmax flip rate. The 12B null was 0/2280 across L27-L48 single-position patches at pre_answer_q4. With 1225 trials per anchor at 27B, ≥5 flips at any (src, tgt) cell = decisive positive.
 
 **Current jobs:**
-- Smoke test for patch_anchor.py: **7654468** (1 src × 1 tgt × L16 only, ~15 min on gpu_1) — *running*.
-- After smoke passes: Exp-A `jobs/tq_m5_patch_27b_pa4_L27-62_20260518.sh` + Exp-B `jobs/tq_m5_patch_27b_endready_L12-20_20260518.sh` (both gpu_1, 8h walltime, can run in parallel).
-- 12B v2 16-anchor probe: **7654195** (cpu_40, 2h) — *should be done*, pending result check.
+- Exp-A: **7654936** `tq_m5_patch_27b_pa4_L27-62_20260518.sh` (gpu_1, 8h wall) — *queued*. Submitted after smoke passed.
+- Exp-B: **7654937** `tq_m5_patch_27b_endready_L12-20_20260518.sh` (gpu_1, 8h wall) — *queued*. Both can run in parallel; smoke ran 49 trials in 8.5 s after 7.5 min model load, so each big job should finish in ~30 min once it picks up a node.
+- Smoke test **7654468** passed: 49 trials clean, anchor lookup + v2 capture loading + hook fire/remove all verified end-to-end. Single-layer L16 patch produced 0 flips and small noisy logit-diff deltas (-0.81 to +0.56) — expected at n=1 src/tgt; pipeline is sound.
+- 12B v2 16-anchor probe: **7654195** *done*. Confirms v2-vs-v2 12B/27B contrast: 12B end_ready peaks at LR 0.275 @ L1 (1.10× chance), late-band L20-L48 below chance. 12B pre_answer_q4 peaks at 3.10× chance @ L31 (matches M3 0.79). v2 results pulled to `runs/m5_positional_probe_12b_default_v2_n80.json`.
 
 Plan: `~/.claude/plans/check-the-latest-status-bright-horizon.md`. Scope deferred (unchanged): Phase B1 steering (no candidate features), B2/B3 (M5b), `mlp_out`/`attn_out` SAEs at L31/L41 (would tell us about per-component sparsity but doesn't change the residual-stream story).
 **Last agent:** Claude
