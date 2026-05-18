@@ -34,15 +34,33 @@ Top-10 cross-turn intersection is **∅** at both layers (only adjacent turns ev
 
 Phase A first cut at L31/q4 (commit 52cd9ce): A4 fails by 0.48. Phase A3.2 turn-progressive at L31 (commit 8b1acf0) and L41 second cut (this commit): both fail at every turn.
 
-**Next: M4 patch sweep at 27B end_ready, headline experiment for whether the new commitment is causal or only legible.**
+**Next: 2x patch sweep at 27B (apples-to-apples + new finding), ship code, run, write up.**
 
-Decision-gate threshold ("end_ready LR LOO ≥0.30 in late band") cleared (0.309 band mean, 0.508 peak), so the gate fired. Next experiment:
-1. **Patch at 27B end_ready / L12–L20 band (peak signal).** Single-anchor residual splice from source-class run into target-class run, all 9 layers patched simultaneously (Heimersheim & Nanda "low-granularity band first"). 5 src × 5 tgt × ~49 class-pairs ≈ 1200 patched trials + 25 baselines. **Engineering blocker:** `scripts/patch_turn4.py` only supports `pre_answer_qN` positions today — needs extending to take `--anchor end_ready` (or new `scripts/patch_anchor.py`). Headline outcome: ≥5/1200 flips at any (src, tgt) class pair = scale shifts to load-bearing retrieval; ≤2/1200 = improvisation-coexists-with-decoration.
-2. **Companion 12B v2 16-anchor probe (in flight as of submit).** Job **7654195** (cpu_40, 2h wall) → `runs/m5_positional_probe_12b_default_v2_n80.json`. Gives us the clean v2-vs-v2 12B comparator the 27B writeup flagged. Cheap, useful regardless of patch outcome.
+`scripts/patch_anchor.py` written today — extends `patch_turn4.py` to any of the 16 v2 structural anchors, loading source residuals from the v2 capture .pt files instead of per-turn activation files. Reuses `capture_positional_residuals._find_anchors` so target anchor positions align with the indices used during source-residual computation.
+
+Two patch experiments designed to disambiguate scale × locus:
+
+| | anchor | layers | rationale | infra |
+|---|---|---|---|---|
+| **Exp-A** | `pre_answer_q4` | L27-L62 (36 layers) | Apples-to-apples to 12B M4 0/2280 null; layer band is 27B's LR > 0.50 cells at pre_answer_q4 | `patch_turn4.py` (existing) |
+| **Exp-B** | `end_ready` | L12-L20 (9 layers) | The 27B-only finding; layer band is the LR peak (0.42-0.51 at L12-L20) | `patch_anchor.py` (new) |
+
+Outcomes interpreted jointly:
+- Both null → improvisation is scale-robust at every anchor.
+- Only B fires → scale creates a new commitment locus, distinct mechanism from 12B's late-band.
+- Only A fires → scale upgrades the *same* late-band signal to causal; end_ready commitment is decorative even though decodable.
+- Both fire → retrieval-at-scale headline.
+
+Continuous metric is `logit_diff_delta = logit[src] - logit[tgt]` patched minus baseline; categorical metric is reveal first-token argmax flip rate. The 12B null was 0/2280 across L27-L48 single-position patches at pre_answer_q4. With 1225 trials per anchor at 27B, ≥5 flips at any (src, tgt) cell = decisive positive.
+
+**Current jobs:**
+- Smoke test for patch_anchor.py: **7654468** (1 src × 1 tgt × L16 only, ~15 min on gpu_1) — *running*.
+- After smoke passes: Exp-A `jobs/tq_m5_patch_27b_pa4_L27-62_20260518.sh` + Exp-B `jobs/tq_m5_patch_27b_endready_L12-20_20260518.sh` (both gpu_1, 8h walltime, can run in parallel).
+- 12B v2 16-anchor probe: **7654195** (cpu_40, 2h) — *should be done*, pending result check.
 
 Plan: `~/.claude/plans/check-the-latest-status-bright-horizon.md`. Scope deferred (unchanged): Phase B1 steering (no candidate features), B2/B3 (M5b), `mlp_out`/`attn_out` SAEs at L31/L41 (would tell us about per-component sparsity but doesn't change the residual-stream story).
 **Last agent:** Claude
-**Last updated:** 2026-05-18 (27B probe 7568083 finished overnight: end_ready LR LOO 0.508 @ L16 clears chance, pre_answer_q4 LR 0.672 @ L38 = 4.70× chance. Writeup `docs/progress/M5-positional-probe-27b-default-v2.md` shipped. Submitted 12B v2 probe 7654195 for v2-vs-v2 comparator. Next blocker: patch_turn4.py needs `--anchor` arg before M4 patch can hit end_ready at 27B.)
+**Last updated:** 2026-05-18 (27B probe 7568083 finished overnight: end_ready LR LOO 0.508 @ L16 clears chance, pre_answer_q4 LR 0.672 @ L38 = 4.70× chance. Writeup `docs/progress/M5-positional-probe-27b-default-v2.md` shipped. Realised the earlier "27B doesn't change the mechanism" claim in `docs/progress/M4-comparative-prompt-and-scale.md` rested on a lens-based proxy because the original 27B probe job 7274201 hit walltime at exit_status=137 (cpu_8/3h30m). The lens proxy looked at L25-L30 in the unembed-readable subspace where 27B's signal is moderate; the new full residual LR scan finds the peak at L12-L20 where scale rotates the code *out* of unembed alignment. Two patch jobs designed + scripted + smoke-tested today.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
