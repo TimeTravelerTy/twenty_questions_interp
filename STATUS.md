@@ -3,7 +3,7 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** **M5 scale comparison — 27B grants explicit pre-commitment at `end_ready`.** At 27B the self-chosen class direction is linearly decodable in the residual stream **at end_ready** — LR LOO peak **0.508 @ L16** (3.55× chance 0.143), L27–48 band mean 0.309 (2.16× chance). At 12B the same anchor sits at chance. **Scale grants an early-network class commitment that 12B lacks.** Whether it's load-bearing or only legible is the next experiment. Writeup: `docs/progress/M5-positional-probe-27b-default-v2.md`.
+**Current milestone:** **M5 scale comparison — scale shifts class-info *legibility*, not its causal role. Improvisation is scale-robust.** At 27B the residual carries decodable class information at end_ready (LR 0.508 @ L16, 3.55× chance) where 12B was at chance — but single-anchor band patching at end_ready / L12-L20 produces **3/870 = 0.34% flips to source**, all on a single fragile target (attempt_593, a horse-reveal) and all from cow sources. The same null pattern holds at 27B pre_answer_q4 / L27-L62 (3/870 flips, same target, same fragility signature) and at 12B M4 pa4 / L27-L48 (5/300 flips, all on attempt_588). The 12B M4 full-residual replacement (L1-L48 every-layer at pa4) produces **0/300 flips**. The improvisation/re-derivation mechanism dominates at both scales; scale rotates more class information into linearly-readable subspaces of the residual without changing how the model uses that information downstream. Writeups: `docs/progress/M5-patch-27b-end_ready-pa4.md`, `docs/progress/M5-positional-probe-27b-default-v2.md`.
 
 Per-anchor 27B headlines (LR LOO; chance 0.143):
 
@@ -34,34 +34,26 @@ Top-10 cross-turn intersection is **∅** at both layers (only adjacent turns ev
 
 Phase A first cut at L31/q4 (commit 52cd9ce): A4 fails by 0.48. Phase A3.2 turn-progressive at L31 (commit 8b1acf0) and L41 second cut (this commit): both fail at every turn.
 
-**Next: 2x patch sweep at 27B (apples-to-apples + new finding), ship code, run, write up.**
+**Next: harden the scale-robust improvisation claim with two stronger interventions before blog-writing.**
 
-`scripts/patch_anchor.py` written today — extends `patch_turn4.py` to any of the 16 v2 structural anchors, loading source residuals from the v2 capture .pt files instead of per-turn activation files. Reuses `capture_positional_residuals._find_anchors` so target anchor positions align with the indices used during source-residual computation.
+The single-anchor band patch is one of several possible interventions and the model could plausibly re-derive class info downstream of any single blocked site. Two follow-ups, both cheap:
 
-Two patch experiments designed to disambiguate scale × locus:
+1. **Multi-anchor simultaneous patching at 27B** — patch `end_ready` AND every `end_model_qN` simultaneously, same source run, same layer scoping per anchor. Blocks every "re-derivation" site at once. Predicted null based on the single-anchor result; if it fires, the load-bearing locus is the *aggregate* of re-derivation sites, not any single one. Engineering: small extension to `patch_anchor.py` to accept multiple `--anchor` values. ~30 min on gpu_1 once submitted.
+2. **Full-residual replacement at 27B** — `--layers 1,2,...,62` at pa4 and at end_ready separately. Strongest possible single-anchor intervention; mirrors 12B's L1-L48 every-layer experiment (which was 0/300 flips). Predicted null. Uses existing infra unchanged.
+3. **Replay attempt_593** under fixed kwargs to confirm baseline non-determinism (mirrors the [attempt_588 side-investigation](STATUS.md)). If the baseline drifts class on replay, the 3/870 27B "flips" are confirmed noise, not weak signal.
 
-| | anchor | layers | rationale | infra |
-|---|---|---|---|---|
-| **Exp-A** | `pre_answer_q4` | L27-L62 (36 layers) | Apples-to-apples to 12B M4 0/2280 null; layer band is 27B's LR > 0.50 cells at pre_answer_q4 | `patch_turn4.py` (existing) |
-| **Exp-B** | `end_ready` | L12-L20 (9 layers) | The 27B-only finding; layer band is the LR peak (0.42-0.51 at L12-L20) | `patch_anchor.py` (new) |
+After (1)+(2)+(3), the M5 chapter is blog-ready: one decoding probe story (end_ready clears chance at scale), one SAE-negative (no sparse class feature), one patch story (scale-robust improvisation, single-anchor null + multi-anchor null + full-residual null). Then write `docs/progress/M5-scale-improvisation-headline.md` and unify the M5 narrative for the blog draft.
 
-Outcomes interpreted jointly:
-- Both null → improvisation is scale-robust at every anchor.
-- Only B fires → scale creates a new commitment locus, distinct mechanism from 12B's late-band.
-- Only A fires → scale upgrades the *same* late-band signal to causal; end_ready commitment is decorative even though decodable.
-- Both fire → retrieval-at-scale headline.
-
-Continuous metric is `logit_diff_delta = logit[src] - logit[tgt]` patched minus baseline; categorical metric is reveal first-token argmax flip rate. The 12B null was 0/2280 across L27-L48 single-position patches at pre_answer_q4. With 1225 trials per anchor at 27B, ≥5 flips at any (src, tgt) cell = decisive positive.
-
-**Current jobs:**
-- Exp-A: **7654936** `tq_m5_patch_27b_pa4_L27-62_20260518.sh` (gpu_1, 8h wall) — *queued*. Submitted after smoke passed.
-- Exp-B: **7654937** `tq_m5_patch_27b_endready_L12-20_20260518.sh` (gpu_1, 8h wall) — *queued*. Both can run in parallel; smoke ran 49 trials in 8.5 s after 7.5 min model load, so each big job should finish in ~30 min once it picks up a node.
-- Smoke test **7654468** passed: 49 trials clean, anchor lookup + v2 capture loading + hook fire/remove all verified end-to-end. Single-layer L16 patch produced 0 flips and small noisy logit-diff deltas (-0.81 to +0.56) — expected at n=1 src/tgt; pipeline is sound.
-- 12B v2 16-anchor probe: **7654195** *done*. Confirms v2-vs-v2 12B/27B contrast: 12B end_ready peaks at LR 0.275 @ L1 (1.10× chance), late-band L20-L48 below chance. 12B pre_answer_q4 peaks at 3.10× chance @ L31 (matches M3 0.79). v2 results pulled to `runs/m5_positional_probe_12b_default_v2_n80.json`.
+**Done this session:**
+- 27B v2 capture + probe (job 7568083): end_ready LR 0.508 @ L16, pa4 LR 0.672 @ L38.
+- 12B v2 16-anchor probe (job 7654195): end_ready 1.10× chance, late-band below chance.
+- New `scripts/patch_anchor.py` (generic v2-anchor patcher).
+- Smoke test 7654468 + Exp-A 7654936 + Exp-B 7654937 (all completed on gpu_1).
+- Writeups: `M5-positional-probe-27b-default-v2.md`, `M5-patch-27b-end_ready-pa4.md`, `M5-sae-residual-misaligned-12b-L31-L41.md`.
 
 Plan: `~/.claude/plans/check-the-latest-status-bright-horizon.md`. Scope deferred (unchanged): Phase B1 steering (no candidate features), B2/B3 (M5b), `mlp_out`/`attn_out` SAEs at L31/L41 (would tell us about per-component sparsity but doesn't change the residual-stream story).
 **Last agent:** Claude
-**Last updated:** 2026-05-18 (27B probe 7568083 finished overnight: end_ready LR LOO 0.508 @ L16 clears chance, pre_answer_q4 LR 0.672 @ L38 = 4.70× chance. Writeup `docs/progress/M5-positional-probe-27b-default-v2.md` shipped. Realised the earlier "27B doesn't change the mechanism" claim in `docs/progress/M4-comparative-prompt-and-scale.md` rested on a lens-based proxy because the original 27B probe job 7274201 hit walltime at exit_status=137 (cpu_8/3h30m). The lens proxy looked at L25-L30 in the unembed-readable subspace where 27B's signal is moderate; the new full residual LR scan finds the peak at L12-L20 where scale rotates the code *out* of unembed alignment. Two patch jobs designed + scripted + smoke-tested today.)
+**Last updated:** 2026-05-19 (Both 27B patch jobs from yesterday completed in ~14 min on gpu_1. Exp-A pa4 / L27-L62: 3/870 flips. Exp-B end_ready / L12-L20: 3/870 flips. Both flip patterns concentrate on a single fragile horse-tgt (attempt_593) — same signature as 12B's attempt_588 baseline non-determinism. Logit-diff delta off-diagonal mean (excl shark): -0.19 at pa4, -0.01 at end_ready. The "scale shifts to retrieval" preview from yesterday's probe is overturned at the causal level: **scale shifts class-info legibility, not its causal role**. STATUS's prior "0/2280" 12B number was wrong — actual 12B pa4 L27-L48 was 5/300 (single fragile tgt), and 12B pa4 L1-L48 every-layer was 0/300. New writeup `docs/progress/M5-patch-27b-end_ready-pa4.md` ships the correction + the scale-robust improvisation headline. Pending: multi-anchor patching, L1-L62 full-residual at 27B, attempt_593 replay.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
