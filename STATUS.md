@@ -3,14 +3,23 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** **M5 pivot shipped + 27B scale comparison in flight.** Two things landed today (2026-05-17):
+**Current milestone:** **M5 scale comparison — 27B grants explicit pre-commitment at `end_ready`.** At 27B the self-chosen class direction is linearly decodable in the residual stream **at end_ready** — LR LOO peak **0.508 @ L16** (3.55× chance 0.143), L27–48 band mean 0.309 (2.16× chance). At 12B the same anchor sits at chance. **Scale grants an early-network class commitment that 12B lacks.** Whether it's load-bearing or only legible is the next experiment. Writeup: `docs/progress/M5-positional-probe-27b-default-v2.md`.
 
-1. **SAE-negative writeup published.** `docs/progress/M5-sae-residual-misaligned-12b-L31-L41.md` — the L31 + L41 default-Gemma-Scope-2 negative is now a load-bearing finding, not a method failure: residual LR 0.79 → sparse LR 0.21–0.33 at every `pre_answer_qN`, zero-feature all-four-turn intersection in the top-10 class-discriminative set at both layers. Sharpens the M4 improvisation claim from "causally inert" to "structurally distributed + dialogue-progressive + class-asymmetric" once combined with the prior attribute-bundle finding.
-2. **27B scale capture shipped.** `runs/positional_residuals/27b_default_n80_v2/` — 600 runs × 16 anchors × 63 layers × 5376-d in bf16 (13 GB on /gs/bs HDD; the entire `runs/` tree is now symlinked from /gs/fs → /gs/bs to relieve Lustre SSD pressure). Capture job **7566164** (gpu_1, 69.2 s wall, K=16 ✓). Probe job **7568083** (cpu_40, 6 h wall) is **in flight** as of submit — writes `runs/m5_positional_probe_27b_default_v2_n120.json` + `_centroids.pt` on success.
+Per-anchor 27B headlines (LR LOO; chance 0.143):
 
-**Prior 12B M5 attribute-bundle (still locked):** dog clears `pre_answer_q1` (0.801, baseline 0.75); cow/elephant/horse only clear baseline at turn-4 (0.835–0.885). Writeup: `docs/progress/M5-attribute-bundle-12b-default-v2.md`.
+| anchor | LR max | @ L | L20–45 mean | × chance peak |
+|---|---:|---:|---:|---:|
+| end_user_prompt | 0.484 | L19 | 0.379 | 3.39 |
+| **end_ready** | **0.508** | **L16** | **0.338** | **3.55** |
+| pre_answer_q1 | 0.574 | L38 | 0.466 | 4.02 |
+| **pre_answer_q4** | **0.672** | **L38** | **0.560** | **4.70** |
+| pre_reveal_gen | 0.820 | L58 | 0.526 | 5.74 |
 
-**Prior M5 Phase A SAE-retrieval status:** decision gate triggered at L31 AND L41. Both Gemma Scope 2 12b-it resid_post fixed-depth layers we tested fail A4 at every pre_answer_qN anchor and show no stable cross-turn class axis.
+Every anchor strengthens by ~+1.6–2.4× chance relative to 12B; the **biggest qualitative shift is at end_user_prompt + end_ready**, which go from at-chance (12B) to clearly decodable (27B). Late-band turn-4 also sharpens (12B 3.15× → 27B 4.70× chance at pre_answer_q4 peak).
+
+**Prior milestones (still locked):**
+- *M5 SAE-negative writeup* (2026-05-17): `docs/progress/M5-sae-residual-misaligned-12b-L31-L41.md`. L31 + L41 default Gemma Scope 2 SAEs fail to sparsify the M3 class direction at every pre_answer_qN anchor; residual LR 0.79 → sparse LR 0.21–0.33; all-four-turn top-10 class-discriminative intersection = ∅ at both layers.
+- *M5 attribute-bundle 12B v2*: `docs/progress/M5-attribute-bundle-12b-default-v2.md`. Dog clears pre_answer_q1 (0.801, baseline 0.75); cow/elephant/horse only clear baseline at turn-4 (0.835–0.885).
 
 Side-by-side, balanced 20/class LR LOO (chance 0.25; M3 residual probe at L31/q4 = 0.79):
 
@@ -25,13 +34,15 @@ Top-10 cross-turn intersection is **∅** at both layers (only adjacent turns ev
 
 Phase A first cut at L31/q4 (commit 52cd9ce): A4 fails by 0.48. Phase A3.2 turn-progressive at L31 (commit 8b1acf0) and L41 second cut (this commit): both fail at every turn.
 
-**Next: wait on probe 7568083, then branch on `end_ready` LR LOO at 27B.**
-- If end_ready clears chance (≥0.30 in late band, ≥0.40 anywhere): scale grants explicit pre-commitment. Re-run the M4 single-position patch sweep at the 27B end_ready peak layer (cpu/gpu TBD on observed peak layer) — the "retrieval at scale" headline requires both legibility AND causal load-bearing.
-- If end_ready stays at chance: improvisation is scale-robust. That **is** the headline; ship a `docs/progress/M5-scale-improvisation-12b-vs-27b.md` writeup pairing the 12B M3/M4 results with the 27B null and call M5 done at decomposition + scale-invariance.
+**Next: M4 patch sweep at 27B end_ready, headline experiment for whether the new commitment is causal or only legible.**
+
+Decision-gate threshold ("end_ready LR LOO ≥0.30 in late band") cleared (0.309 band mean, 0.508 peak), so the gate fired. Next experiment:
+1. **Patch at 27B end_ready / L12–L20 band (peak signal).** Single-anchor residual splice from source-class run into target-class run, all 9 layers patched simultaneously (Heimersheim & Nanda "low-granularity band first"). 5 src × 5 tgt × ~49 class-pairs ≈ 1200 patched trials + 25 baselines. **Engineering blocker:** `scripts/patch_turn4.py` only supports `pre_answer_qN` positions today — needs extending to take `--anchor end_ready` (or new `scripts/patch_anchor.py`). Headline outcome: ≥5/1200 flips at any (src, tgt) class pair = scale shifts to load-bearing retrieval; ≤2/1200 = improvisation-coexists-with-decoration.
+2. **Companion 12B v2 16-anchor probe (in flight as of submit).** Job **7654195** (cpu_40, 2h wall) → `runs/m5_positional_probe_12b_default_v2_n80.json`. Gives us the clean v2-vs-v2 12B comparator the 27B writeup flagged. Cheap, useful regardless of patch outcome.
 
 Plan: `~/.claude/plans/check-the-latest-status-bright-horizon.md`. Scope deferred (unchanged): Phase B1 steering (no candidate features), B2/B3 (M5b), `mlp_out`/`attn_out` SAEs at L31/L41 (would tell us about per-component sparsity but doesn't change the residual-stream story).
 **Last agent:** Claude
-**Last updated:** 2026-05-17 (M5 pivot shipped: SAE-negative writeup + 27B v2 capture done in one session; 27B probe job 7568083 in flight. Capture job 7566164: gpu_1, 69.2 s wall, 600 OK, output `runs/positional_residuals/27b_default_n80_v2/` (13 GB on /gs/bs). New job scripts: `jobs/tq_m5_capture_positional_27b_default_v2_20260517.sh`, `jobs/tq_m5_probe_positional_27b_v2_20260517.sh`. Storage note: `runs/` on /gs/fs is now a symlink to `/gs/bs/.../twenty_questions_interp/runs/` — large captures (positional residuals, SAE firings) live on HDD; transparent to all scripts.)
+**Last updated:** 2026-05-18 (27B probe 7568083 finished overnight: end_ready LR LOO 0.508 @ L16 clears chance, pre_answer_q4 LR 0.672 @ L38 = 4.70× chance. Writeup `docs/progress/M5-positional-probe-27b-default-v2.md` shipped. Submitted 12B v2 probe 7654195 for v2-vs-v2 comparator. Next blocker: patch_turn4.py needs `--anchor` arg before M4 patch can hit end_ready at 27B.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
