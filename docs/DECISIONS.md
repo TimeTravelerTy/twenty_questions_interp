@@ -1443,5 +1443,68 @@ they shared across the four-class attractor or class-specific?
 NOT submitted autonomously. Held back for user research-judgment on
 M5 scoping.
 
+## 2026-05-21 — D-43: M5 closed — improvisation is scale-robust; the decodable class direction is causally epiphenomenal
+
+Three follow-up interventions hardened the M5 patch story; all null.
+Headline writeup: `docs/progress/M5-scale-improvisation-headline.md`.
+
+### The `attempt_593` exclusion (and why "3/870" was wrong)
+
+STATUS reported the 27B band patches as "3/870 flips, all from cow
+sources." This was a **flip-to-source metric artifact**. The metric
+counts a flip only when the reveal lands on the *source* class. The
+target run `attempt_593` (horse-reveal) sits on the horse/cow decision
+boundary and tips into the cow attractor under *any* residual patch.
+A cow→593 patch landing on cow registers; a tiger→593 or horse→593
+patch landing on cow does not. The full-residual L1-L62 results make
+this unambiguous: `attempt_593` splits ~16/16 horse/cow under
+every-layer replacement *regardless of source class*, including
+horse→horse self-patches. A self-patch carries zero cross-class
+information, so this is pure boundary-degeneracy, not class transfer.
+
+**Decision:** `attempt_593` is excluded from off-diagonal flip tallies.
+Its unpatched baseline is stable horse (0/32 baseline drift in every
+27B job); the fragility appears only under perturbation. With it
+excluded, all six M5/M4 interventions show **0 off-diagonal class
+transfers**.
+
+### Resolving the `attempt_593` replay without compute
+
+The pending "replay attempt_593 under fixed kwargs" follow-up was
+resolved analytically. The horse→horse self-patch already in the
+existing patch JSONs is a *stronger* fragility control than a fresh
+baseline replay would be — a same-class patch flipping the target is
+direct proof of boundary-degeneracy, whereas a `do_sample=False`
+replay is deterministic on fixed hardware and would likely just
+re-confirm "stable horse." No job submitted.
+
+### Multi-anchor patch layer band — L12-L48
+
+The multi-anchor experiment (patch end_ready + end_model_q1–q4
+simultaneously) uses a single uniform band L12-L48 at all five
+anchors. Rationale: L12-L48 spans the end_ready commitment band
+(L12-20, LR peak @ L16) and the decodable mid-late class carry band
+(the STATUS L20-45 probe-summary zone). A uniform band keeps the
+intervention interpretable; the depth axis is covered separately by
+the L1-L62 full-residual jobs. "Same layer scoping per anchor" in the
+prior STATUS note is read as "the same band applied at each anchor."
+
+### `shark` underpowering caveat (unchanged, restated)
+
+The 27B run distribution collapses to ~6 attractors (D-42 scale axis);
+`shark` realises only 2 source runs. In the multi-anchor job,
+shark-source patches produce non-specific drift on 7 targets — all
+flipping to *non-shark* classes. This is degenerate-residual noise,
+not a shark class channel, and does not affect the null.
+
+### Consequence
+
+M5 is closed. The chapter for the blog: (1) decoding probe — scale
+upgrades class-info legibility (end_ready at-chance at 12B → 3.55×
+chance at 27B); (2) SAE-negative — the direction is residual-
+distributed, not a sparse feature; (3) patch sweep — six escalating
+interventions null, the legible direction is epiphenomenal.
+Improvisation is scale-robust. Next: the M4+M5 blog draft.
+
 
 

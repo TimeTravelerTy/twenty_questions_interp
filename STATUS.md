@@ -3,7 +3,7 @@
 > **First file any agent reads.** The `Next concrete step` is always actionable
 > without reading anything else. Update the `Last updated` line on every session.
 
-**Current milestone:** **M5 scale comparison — scale shifts class-info *legibility*, not its causal role. Improvisation is scale-robust.** At 27B the residual carries decodable class information at end_ready (LR 0.508 @ L16, 3.55× chance) where 12B was at chance — but single-anchor band patching at end_ready / L12-L20 produces **3/870 = 0.34% flips to source**, all on a single fragile target (attempt_593, a horse-reveal) and all from cow sources. The same null pattern holds at 27B pre_answer_q4 / L27-L62 (3/870 flips, same target, same fragility signature) and at 12B M4 pa4 / L27-L48 (5/300 flips, all on attempt_588). The 12B M4 full-residual replacement (L1-L48 every-layer at pa4) produces **0/300 flips**. The improvisation/re-derivation mechanism dominates at both scales; scale rotates more class information into linearly-readable subspaces of the residual without changing how the model uses that information downstream. Writeups: `docs/progress/M5-patch-27b-end_ready-pa4.md`, `docs/progress/M5-positional-probe-27b-default-v2.md`.
+**Current milestone:** **M5 scale comparison — DONE. Scale shifts class-info *legibility*, not its causal role. Improvisation is scale-robust.** At 27B the residual carries decodable class information at end_ready (LR 0.508 @ L16, 3.55× chance) where 12B was at chance — but the legible direction is **epiphenomenal** for the reveal. Six escalating causal interventions are all null: 12B full-residual L1-L48 @ pa4; 27B band patches @ pa4 (L27-L62) and @ end_ready (L12-L20); 27B multi-anchor L12-L48 @ end_ready + end_model_q1–q4; 27B full-residual L1-L62 @ pa4; 27B full-residual L1-L62 @ end_ready. Each produces **0 off-diagonal class transfers** across all target runs except the single boundary-degenerate target `attempt_593`. STATUS's prior "3/870 flips, all from cow sources" was a metric artifact — `attempt_593` flips content-agnostically: under L1-L62 full-residual replacement it splits ~50/50 horse/cow regardless of source class (incl. horse→horse self-patches), so it carries zero class signal and is excluded. Unpatched baselines are stable (0/32 drift in every 27B job). The improvisation/re-derivation mechanism dominates at both scales; scale rotates more class information into linearly-readable subspaces without changing how the model uses it downstream. Headline writeup: `docs/progress/M5-scale-improvisation-headline.md`. Strand writeups: `M5-patch-27b-end_ready-pa4.md`, `M5-positional-probe-27b-default-v2.md`, `M5-sae-residual-misaligned-12b-L31-L41.md`.
 
 Per-anchor 27B headlines (LR LOO; chance 0.143):
 
@@ -34,26 +34,37 @@ Top-10 cross-turn intersection is **∅** at both layers (only adjacent turns ev
 
 Phase A first cut at L31/q4 (commit 52cd9ce): A4 fails by 0.48. Phase A3.2 turn-progressive at L31 (commit 8b1acf0) and L41 second cut (this commit): both fail at every turn.
 
-**Next: harden the scale-robust improvisation claim with two stronger interventions before blog-writing.**
+**Next: write the blog draft.** M5 is closed — all three strands (decoding
+probe, SAE-negative, patch sweep) are done and the headline writeup
+unifies them. The blog chapter is: M4 establishes improvisation; M5 shows
+it is scale-robust *and* that the decodable class direction is
+epiphenomenal. Draft `docs/progress/` → blog post unifying M4 + M5.
 
-The single-anchor band patch is one of several possible interventions and the model could plausibly re-derive class info downstream of any single blocked site. Two follow-ups, both cheap:
-
-1. **Multi-anchor simultaneous patching at 27B** — patch `end_ready` AND every `end_model_qN` simultaneously, same source run, same layer scoping per anchor. Blocks every "re-derivation" site at once. Predicted null based on the single-anchor result; if it fires, the load-bearing locus is the *aggregate* of re-derivation sites, not any single one. Engineering: small extension to `patch_anchor.py` to accept multiple `--anchor` values. ~30 min on gpu_1 once submitted.
-2. **Full-residual replacement at 27B** — `--layers 1,2,...,62` at pa4 and at end_ready separately. Strongest possible single-anchor intervention; mirrors 12B's L1-L48 every-layer experiment (which was 0/300 flips). Predicted null. Uses existing infra unchanged.
-3. **Replay attempt_593** under fixed kwargs to confirm baseline non-determinism (mirrors the [attempt_588 side-investigation](STATUS.md)). If the baseline drifts class on replay, the 3/870 27B "flips" are confirmed noise, not weak signal.
-
-After (1)+(2)+(3), the M5 chapter is blog-ready: one decoding probe story (end_ready clears chance at scale), one SAE-negative (no sparse class feature), one patch story (scale-robust improvisation, single-anchor null + multi-anchor null + full-residual null). Then write `docs/progress/M5-scale-improvisation-headline.md` and unify the M5 narrative for the blog draft.
+No further M5 experiments are needed. Deferred scope unchanged (see below).
 
 **Done this session:**
+- Extended `scripts/patch_anchor.py`: `--anchor` accepts a comma-separated
+  list for simultaneous multi-anchor patching (single-anchor behavior
+  unchanged). Smoke 7737394 validated the multi-anchor path.
+- Submitted + completed 3 new 27B patch jobs on gpu_1: multi-anchor L12-48
+  @ end_ready+end_model_q1–q4 (7737407), full-residual L1-62 @ pa4
+  (7737408), full-residual L1-62 @ end_ready (7737409). All null:
+  0/843 off-diagonal flip-to-source excluding `attempt_593`.
+- Resolved the `attempt_593` replay analytically from existing JSONs — the
+  horse→horse self-patch flip is a stronger fragility control than a
+  baseline replay; no compute spent.
+- Headline writeup `docs/progress/M5-scale-improvisation-headline.md`.
+
+**Prior session (M5 strands 1–2 + first patch sweep):**
 - 27B v2 capture + probe (job 7568083): end_ready LR 0.508 @ L16, pa4 LR 0.672 @ L38.
 - 12B v2 16-anchor probe (job 7654195): end_ready 1.10× chance, late-band below chance.
-- New `scripts/patch_anchor.py` (generic v2-anchor patcher).
-- Smoke test 7654468 + Exp-A 7654936 + Exp-B 7654937 (all completed on gpu_1).
+- `scripts/patch_anchor.py` created (generic v2-anchor patcher).
+- 27B band patches: Exp-A 7654936 (pa4 L27-62), Exp-B 7654937 (end_ready L12-20).
 - Writeups: `M5-positional-probe-27b-default-v2.md`, `M5-patch-27b-end_ready-pa4.md`, `M5-sae-residual-misaligned-12b-L31-L41.md`.
 
 Plan: `~/.claude/plans/check-the-latest-status-bright-horizon.md`. Scope deferred (unchanged): Phase B1 steering (no candidate features), B2/B3 (M5b), `mlp_out`/`attn_out` SAEs at L31/L41 (would tell us about per-component sparsity but doesn't change the residual-stream story).
 **Last agent:** Claude
-**Last updated:** 2026-05-19 (Both 27B patch jobs from yesterday completed in ~14 min on gpu_1. Exp-A pa4 / L27-L62: 3/870 flips. Exp-B end_ready / L12-L20: 3/870 flips. Both flip patterns concentrate on a single fragile horse-tgt (attempt_593) — same signature as 12B's attempt_588 baseline non-determinism. Logit-diff delta off-diagonal mean (excl shark): -0.19 at pa4, -0.01 at end_ready. The "scale shifts to retrieval" preview from yesterday's probe is overturned at the causal level: **scale shifts class-info legibility, not its causal role**. STATUS's prior "0/2280" 12B number was wrong — actual 12B pa4 L27-L48 was 5/300 (single fragile tgt), and 12B pa4 L1-L48 every-layer was 0/300. New writeup `docs/progress/M5-patch-27b-end_ready-pa4.md` ships the correction + the scale-robust improvisation headline. Pending: multi-anchor patching, L1-L62 full-residual at 27B, attempt_593 replay.)
+**Last updated:** 2026-05-21 (M5 closed. The three pending follow-ups are done: multi-anchor patch (27B, 5 sites, L12-48 — job 7737407), full-residual L1-62 at pa4 (7737408) and at end_ready (7737409). All three null: 0/843 off-diagonal class transfers excluding the boundary-degenerate target attempt_593. The attempt_593 "replay" was resolved analytically — under L1-62 full-residual replacement it splits ~50/50 horse/cow regardless of source class, incl. horse→horse self-patches, so it carries zero class signal; STATUS's prior "3/870 flips, all from cow sources" was a flip-to-source metric artifact and is corrected in the headline writeup. patch_anchor.py extended for multi-anchor (`--anchor` now comma-separated). Headline writeup `docs/progress/M5-scale-improvisation-headline.md` unifies all three M5 strands. M5 chapter is blog-ready; next is the M4+M5 blog draft.)
 
 **North star:** *Calibration is infra; the scientific claim is self-chosen only.*
 Do not headline calibration-only results.
