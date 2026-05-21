@@ -85,8 +85,14 @@ def parse_args() -> argparse.Namespace:
                    help="v2 capture directory with per-run .pt files. "
                         "Each .pt has keys {anchor_labels, anchor_positions, "
                         "residuals (K, n_layers+1, hidden), seq_len, class, run_id}.")
-    p.add_argument("--anchor", required=True, choices=V2_ANCHOR_LABELS,
-                   help="Structural anchor to patch at.")
+    p.add_argument("--anchor", required=True,
+                   help="Structural anchor(s) to patch at. Comma-separated for "
+                        "simultaneous multi-anchor patching, e.g. "
+                        "'end_ready,end_model_q1,end_model_q2,end_model_q3,"
+                        "end_model_q4'. All listed anchors are patched in the "
+                        "same forward pass at the same --layers band, using the "
+                        "same source run. Each value must be one of the 16 v2 "
+                        f"anchor labels: {', '.join(V2_ANCHOR_LABELS)}.")
     p.add_argument("--model", default=MODEL_MAIN)
     p.add_argument("--device", default="auto")
     p.add_argument("--dtype", default="bfloat16",
@@ -151,16 +157,25 @@ def _context_with_reveal(
     return _build_chat_input_ids(handle, rendered, extra_turns=extra)
 
 
-def _make_patch_hook(position: int, src_residual: torch.Tensor):
-    """Forward hook replacing block output at `position` with `src_residual`
-    during prefill. Decode steps (shape[1]==1) are left untouched — KV cache
-    from the patched prefill is what propagates the intervention forward."""
+def _make_patch_hook(pos_to_residual: dict[int, torch.Tensor]):
+    """Forward hook replacing block output at each position in
+    `pos_to_residual` with the corresponding source residual during
+    prefill. Supports multi-anchor patching: one layer block may be
+    patched at several anchor positions in the same forward. Decode
+    steps (shape[1]==1) are left untouched — KV cache from the patched
+    prefill is what propagates the intervention forward."""
     def hook(module, inputs, output):
         hs = output[0] if isinstance(output, tuple) else output
-        if hs.shape[1] <= position:
+        seq = hs.shape[1]
+        new_hs = None
+        for position, src_residual in pos_to_residual.items():
+            if seq <= position:
+                continue
+            if new_hs is None:
+                new_hs = hs.clone()
+            new_hs[:, position, :] = src_residual.to(device=hs.device, dtype=hs.dtype)
+        if new_hs is None:
             return output
-        new_hs = hs.clone()
-        new_hs[:, position, :] = src_residual.to(device=hs.device, dtype=hs.dtype)
         if isinstance(output, tuple):
             return (new_hs,) + tuple(output[1:])
         return new_hs
@@ -224,30 +239,34 @@ def _locate_layer_list(model, max_block_idx: int):
 def _load_src_residuals(
     src_residuals_dir: Path,
     run_id: str,
-    anchor: str,
+    anchors: list[str],
     layers: list[int],
-) -> dict[int, torch.Tensor]:
-    """Load source residual at (anchor, layer) for `layers` from the v2 capture.
-    Returns {layer_idx: tensor of shape (hidden,)}.
+) -> dict[str, dict[int, torch.Tensor]]:
+    """Load source residuals at (anchor, layer) for each anchor in `anchors`
+    and each layer in `layers` from the v2 capture.
+    Returns {anchor: {layer_idx: tensor of shape (hidden,)}}.
     """
     pt_path = src_residuals_dir / f"{run_id}.pt"
     if not pt_path.exists():
         raise FileNotFoundError(f"missing v2 capture file: {pt_path}")
     d = torch.load(pt_path, map_location="cpu", weights_only=False)
     anchor_labels = list(d["anchor_labels"])
-    if anchor not in anchor_labels:
-        raise ValueError(
-            f"anchor {anchor!r} not in capture file's anchor_labels "
-            f"({anchor_labels}) for {pt_path}"
-        )
-    a_idx = anchor_labels.index(anchor)
     residuals = d["residuals"]  # (K, n_layers+1, hidden)
     if residuals.shape[1] <= max(layers):
         raise ValueError(
             f"layer index out of range: max requested {max(layers)} "
             f"vs residuals shape {tuple(residuals.shape)} for {pt_path}"
         )
-    return {L: residuals[a_idx, L].to(torch.float32) for L in layers}
+    out: dict[str, dict[int, torch.Tensor]] = {}
+    for anchor in anchors:
+        if anchor not in anchor_labels:
+            raise ValueError(
+                f"anchor {anchor!r} not in capture file's anchor_labels "
+                f"({anchor_labels}) for {pt_path}"
+            )
+        a_idx = anchor_labels.index(anchor)
+        out[anchor] = {L: residuals[a_idx, L].to(torch.float32) for L in layers}
+    return out
 
 
 def main() -> int:
@@ -279,7 +298,16 @@ def main() -> int:
         print("layers must be >= 1 (0 is embeddings, not a residual block)",
               file=sys.stderr)
         return 2
-    print(f"Patching anchor={args.anchor} layers={layers}")
+    anchors = [a.strip() for a in args.anchor.split(",") if a.strip()]
+    bad = [a for a in anchors if a not in V2_ANCHOR_LABELS]
+    if bad:
+        print(f"unknown anchor(s) {bad}; must be in {V2_ANCHOR_LABELS}",
+              file=sys.stderr)
+        return 2
+    if not anchors:
+        print("no anchors given", file=sys.stderr)
+        return 2
+    print(f"Patching anchors={anchors} layers={layers}")
 
     handle = load_model(args.model, device=args.device, dtype=dtype)
     model = handle.model
@@ -330,20 +358,21 @@ def main() -> int:
     # and run `_find_anchors` to locate the chosen anchor's position.
     # Reuses capture-script logic so positions match those used during
     # source-residual computation.
-    pos_index: dict[str, int] = {}
+    pos_index: dict[str, dict[str, int]] = {}
     for tgt_class, runs in tgt_runs.items():
         for tgt in runs:
             inputs = _context_with_reveal(handle, tgt, bank, args.prompt_variant)
-            anchors = _find_anchors(handle.tokenizer, inputs["input_ids"])
-            if any(k.startswith("__DEBUG_") for k in anchors):
-                print(f"  failed anchor lookup for tgt {tgt.run_id}: {anchors}",
+            found = _find_anchors(handle.tokenizer, inputs["input_ids"])
+            if any(k.startswith("__DEBUG_") for k in found):
+                print(f"  failed anchor lookup for tgt {tgt.run_id}: {found}",
                       file=sys.stderr)
                 continue
-            if args.anchor not in anchors:
-                print(f"  anchor {args.anchor!r} not found in tgt {tgt.run_id}",
+            missing = [a for a in anchors if a not in found]
+            if missing:
+                print(f"  anchor(s) {missing} not found in tgt {tgt.run_id}",
                       file=sys.stderr)
                 continue
-            pos_index[tgt.run_id] = int(anchors[args.anchor])
+            pos_index[tgt.run_id] = {a: int(found[a]) for a in anchors}
 
     # 3) Patched trials.
     patched_records: list[dict[str, Any]] = []
@@ -355,8 +384,8 @@ def main() -> int:
     for src_class in realized:
         for src in src_runs[src_class]:
             try:
-                src_residuals_per_layer = _load_src_residuals(
-                    src_dir, src.run_id, args.anchor, layers
+                src_residuals_per_anchor = _load_src_residuals(
+                    src_dir, src.run_id, anchors, layers
                 )
             except (FileNotFoundError, ValueError) as e:
                 print(f"  skipping src {src.run_id}: {e}", file=sys.stderr)
@@ -367,18 +396,23 @@ def main() -> int:
                     trial += 1
                     if tgt.run_id not in pos_index:
                         continue
-                    pos = pos_index[tgt.run_id]
+                    positions = pos_index[tgt.run_id]  # {anchor: pos}
                     inputs = _context_with_reveal(handle, tgt, bank,
                                                   args.prompt_variant)
-                    if pos >= inputs["input_ids"].shape[1]:
-                        print(f"  pos {pos} >= seq len "
-                              f"{inputs['input_ids'].shape[1]} for tgt "
-                              f"{tgt.run_id}", file=sys.stderr)
+                    seq_len = inputs["input_ids"].shape[1]
+                    if max(positions.values()) >= seq_len:
+                        print(f"  max anchor pos {max(positions.values())} >= "
+                              f"seq len {seq_len} for tgt {tgt.run_id}",
+                              file=sys.stderr)
                         continue
                     hook_handles = []
                     for L in layers:
+                        pos_to_res = {
+                            positions[a]: src_residuals_per_anchor[a][L]
+                            for a in anchors
+                        }
                         h = target_blocks[L].register_forward_hook(
-                            _make_patch_hook(pos, src_residuals_per_layer[L])
+                            _make_patch_hook(pos_to_res)
                         )
                         hook_handles.append(h)
                     try:
@@ -394,7 +428,7 @@ def main() -> int:
                         "src_run": src.run_id,
                         "tgt_class": tgt_class,
                         "tgt_run": tgt.run_id,
-                        "pos": pos,
+                        "positions": positions,
                         "patched_reveal_raw": raw.strip(),
                         "patched_canonical": canon,
                         "patched_class_logits": class_logits,
@@ -457,7 +491,7 @@ def main() -> int:
         "src_residuals_dir": str(src_dir),
         "model": args.model,
         "torch_dtype": args.dtype,
-        "anchor": args.anchor,
+        "anchors": anchors,
         "layers": layers,
         "prompt_variant": args.prompt_variant,
         "n_source_per_class": args.n_source_per_class,
