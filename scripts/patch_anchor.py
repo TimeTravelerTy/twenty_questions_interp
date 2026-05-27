@@ -43,10 +43,11 @@ from twenty_q.dialogue import (
     _history_to_chat_turns,
     load_model,
     parse_reveal_to_canonical,
+    parse_yes_no,
 )
 from twenty_q.manifest import RunManifest
 from twenty_q.permutations import Permutation
-from twenty_q.prompts import self_chosen_prompt
+from twenty_q.prompts import question_turn_prompt, self_chosen_prompt
 
 # Reuse the capture script's anchor-finding logic so positions in this
 # script match the positions used to compute the source residuals.
@@ -110,6 +111,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--n-target-per-class", type=int, default=5)
     p.add_argument("--prompt-variant", default="default")
     p.add_argument("--out-json", required=True)
+    p.add_argument("--answer-rollout", action="store_true",
+                   help="If set, after patching at the anchor the model "
+                        "regenerates each turn's yes/no answer under the "
+                        "patched state (target Q_i text is appended verbatim "
+                        "from the manifest; A_i is greedy-decoded by the "
+                        "patched model). Reveal is then generated after the "
+                        "regenerated turn-4 answer. The patch hook re-fires "
+                        "on every per-turn prefill that contains the anchor "
+                        "position. Default off: original behavior teacher-"
+                        "forces the manifest answers as text and patches only "
+                        "the reveal-ready prefill.")
+    p.add_argument("--rollout-max-new-tokens", type=int, default=8,
+                   help="max_new_tokens for per-turn answer regeneration "
+                        "under --answer-rollout. Yes/No is one or two tokens; "
+                        "8 leaves headroom for trailing punctuation.")
     return p.parse_args()
 
 
@@ -155,6 +171,166 @@ def _context_with_reveal(
         {"role": "user", "content": REVEAL_USER_MESSAGE},
     ]
     return _build_chat_input_ids(handle, rendered, extra_turns=extra)
+
+
+def _build_rollout_context(
+    handle: ModelHandle,
+    manifest: RunManifest,
+    bank: Any,
+    prompt_variant: str,
+    turn_qs: list[str],
+    answers_so_far: list[str],
+    include_reveal: bool,
+) -> dict[str, torch.Tensor]:
+    """Build a chat-input prefix consisting of:
+      system+user prompt → Ready → (Q_i, A_i)*k → optionally Q_{k+1} (no A)
+      → optionally reveal-user message.
+
+    `turn_qs` is the list of target-manifest question texts visible so far
+    (length `len(answers_so_far)` or `len(answers_so_far)+1`). When
+    `len(turn_qs) == len(answers_so_far)+1`, the trailing user question is
+    open — the next greedy decode under this prefix is the model's
+    regenerated answer A_{k+1} under the patched state.
+
+    Position of the `end_ready` anchor in the resulting `input_ids` is
+    stable across rollout steps (the prompt+Ready prefix doesn't change),
+    so the patched residual at end_ready propagates each step via a fresh
+    forward pass.
+    """
+    if manifest.ready_raw_output is None:
+        raise ValueError(f"manifest {manifest.run_id} has no ready_raw_output")
+    display_names = {c.id: c.display for c in bank.candidates}
+    perm = Permutation(order=tuple(manifest.permutation))
+    rendered = self_chosen_prompt(perm, display_names, variant=prompt_variant)
+    extra: list[dict[str, str]] = [
+        {"role": "assistant", "content": manifest.ready_raw_output.strip()}
+    ]
+    for i, q in enumerate(turn_qs):
+        extra.append({"role": "user", "content": question_turn_prompt(q)})
+        if i < len(answers_so_far):
+            extra.append({"role": "assistant", "content": answers_so_far[i].strip()})
+    if include_reveal:
+        extra.append({"role": "user", "content": REVEAL_USER_MESSAGE})
+    return _build_chat_input_ids(handle, rendered, extra_turns=extra)
+
+
+def _register_patch_hooks(
+    target_blocks: dict[int, Any],
+    layers: list[int],
+    positions: dict[str, int],
+    src_residuals_per_anchor: dict[str, dict[int, torch.Tensor]],
+    anchors_to_patch: list[str],
+) -> list[Any]:
+    """Install patch hooks for `anchors_to_patch` at the given positions."""
+    hooks = []
+    for L in layers:
+        pos_to_res = {
+            positions[a]: src_residuals_per_anchor[a][L]
+            for a in anchors_to_patch
+        }
+        if not pos_to_res:
+            continue
+        h = target_blocks[L].register_forward_hook(_make_patch_hook(pos_to_res))
+        hooks.append(h)
+    return hooks
+
+
+def _rollout_trial(
+    handle: ModelHandle,
+    manifest: RunManifest,
+    bank: Any,
+    prompt_variant: str,
+    anchors: list[str],
+    layers: list[int],
+    target_blocks: dict[int, Any],
+    src_residuals_per_anchor: dict[str, dict[int, torch.Tensor]] | None,
+    rollout_max_new_tokens: int,
+    class_first_tok: dict[str, int],
+) -> dict[str, Any] | None:
+    """Run a single rollout. If `src_residuals_per_anchor` is None, patches
+    are disabled (baseline path). Returns None if anchor lookup fails on
+    any rollout step."""
+    turn_qs = [t.question_text for t in manifest.turns]
+    target_answers_bool = [t.answer_bool for t in manifest.turns]
+    target_answers_raw = [t.raw_model_output.strip() for t in manifest.turns]
+
+    gen_answers_raw: list[str] = []
+    gen_answers_bool: list[bool | None] = []
+
+    for i in range(len(turn_qs)):
+        inputs = _build_rollout_context(
+            handle, manifest, bank, prompt_variant,
+            turn_qs[: i + 1], gen_answers_raw, include_reveal=False,
+        )
+        found = _find_anchors(handle.tokenizer, inputs["input_ids"])
+        if any(k.startswith("__DEBUG_") for k in found):
+            return None
+        if src_residuals_per_anchor is not None:
+            valid = [a for a in anchors if a in found]
+            positions = {a: int(found[a]) for a in valid}
+            seq_len = inputs["input_ids"].shape[1]
+            if positions and max(positions.values()) >= seq_len:
+                return None
+            hook_handles = _register_patch_hooks(
+                target_blocks, layers, positions,
+                src_residuals_per_anchor, valid,
+            )
+        else:
+            hook_handles = []
+        try:
+            raw_ans, _ = _generate_reveal_greedy(
+                handle, inputs, max_new_tokens=rollout_max_new_tokens,
+            )
+        finally:
+            for h in hook_handles:
+                h.remove()
+        gen_answers_raw.append(raw_ans.strip())
+        gen_answers_bool.append(parse_yes_no(raw_ans))
+
+    # Reveal generation under the final patched prefix.
+    inputs = _build_rollout_context(
+        handle, manifest, bank, prompt_variant,
+        turn_qs, gen_answers_raw, include_reveal=True,
+    )
+    found = _find_anchors(handle.tokenizer, inputs["input_ids"])
+    if any(k.startswith("__DEBUG_") for k in found):
+        return None
+    if src_residuals_per_anchor is not None:
+        valid = [a for a in anchors if a in found]
+        positions = {a: int(found[a]) for a in valid}
+        seq_len = inputs["input_ids"].shape[1]
+        if positions and max(positions.values()) >= seq_len:
+            return None
+        hook_handles = _register_patch_hooks(
+            target_blocks, layers, positions,
+            src_residuals_per_anchor, valid,
+        )
+    else:
+        hook_handles = []
+    try:
+        raw_reveal, first_logits = _generate_reveal_greedy(handle, inputs)
+    finally:
+        for h in hook_handles:
+            h.remove()
+
+    canon = parse_reveal_to_canonical(raw_reveal, bank)
+    class_logits = {cid: float(first_logits[tid])
+                    for cid, tid in class_first_tok.items()}
+    answer_flips = [
+        (gb is not None and tb is not None and gb != tb)
+        for gb, tb in zip(gen_answers_bool, target_answers_bool)
+    ]
+    return {
+        "regen_answers_raw": gen_answers_raw,
+        "regen_answers_bool": gen_answers_bool,
+        "target_answers_raw": target_answers_raw,
+        "target_answers_bool": target_answers_bool,
+        "answer_flip_mask": answer_flips,
+        "n_answer_flips": sum(answer_flips),
+        "reveal_raw": raw_reveal.strip(),
+        "reveal_canonical": canon,
+        "class_logits": class_logits,
+    }
 
 
 def _make_patch_hook(pos_to_residual: dict[int, torch.Tensor]):
@@ -333,46 +509,78 @@ def main() -> int:
     print(f"Target runs per class: {args.n_target_per_class}")
 
     # 1) No-patch baselines: greedy reveal on each target context.
+    # Under --answer-rollout, the baseline also regenerates each turn's
+    # answer (no patch) so we can subtract baseline non-determinism from
+    # the patched-trial answer-flip counts.
     baseline_records: list[dict[str, Any]] = []
     baseline_class_logits: dict[str, dict[str, float]] = {}
+    baseline_rollout: dict[str, dict[str, Any]] = {}
     t0 = time.time()
     for tgt_class, runs in tgt_runs.items():
         for tgt in runs:
-            inputs = _context_with_reveal(handle, tgt, bank, args.prompt_variant)
-            raw, first_logits = _generate_reveal_greedy(handle, inputs)
-            canon = parse_reveal_to_canonical(raw, bank)
-            class_logits = {cid: float(first_logits[tid])
-                            for cid, tid in class_first_tok.items()}
-            baseline_class_logits[tgt.run_id] = class_logits
-            baseline_records.append({
-                "tgt_class": tgt_class,
-                "tgt_run": tgt.run_id,
-                "baseline_reveal_raw": raw.strip(),
-                "baseline_canonical": canon,
-                "original_reveal_canonical": tgt.reveal_canonical_id,
-                "baseline_class_logits": class_logits,
-            })
+            if args.answer_rollout:
+                roll = _rollout_trial(
+                    handle, tgt, bank, args.prompt_variant,
+                    anchors, layers, target_blocks={}, src_residuals_per_anchor=None,
+                    rollout_max_new_tokens=args.rollout_max_new_tokens,
+                    class_first_tok=class_first_tok,
+                )
+                if roll is None:
+                    print(f"  baseline rollout failed for {tgt.run_id}", file=sys.stderr)
+                    continue
+                baseline_class_logits[tgt.run_id] = roll["class_logits"]
+                baseline_rollout[tgt.run_id] = roll
+                baseline_records.append({
+                    "tgt_class": tgt_class,
+                    "tgt_run": tgt.run_id,
+                    "baseline_reveal_raw": roll["reveal_raw"],
+                    "baseline_canonical": roll["reveal_canonical"],
+                    "original_reveal_canonical": tgt.reveal_canonical_id,
+                    "baseline_class_logits": roll["class_logits"],
+                    "baseline_regen_answers_raw": roll["regen_answers_raw"],
+                    "baseline_regen_answers_bool": roll["regen_answers_bool"],
+                    "target_answers_bool": roll["target_answers_bool"],
+                    "baseline_n_answer_flips": roll["n_answer_flips"],
+                    "baseline_answer_flip_mask": roll["answer_flip_mask"],
+                })
+            else:
+                inputs = _context_with_reveal(handle, tgt, bank, args.prompt_variant)
+                raw, first_logits = _generate_reveal_greedy(handle, inputs)
+                canon = parse_reveal_to_canonical(raw, bank)
+                class_logits = {cid: float(first_logits[tid])
+                                for cid, tid in class_first_tok.items()}
+                baseline_class_logits[tgt.run_id] = class_logits
+                baseline_records.append({
+                    "tgt_class": tgt_class,
+                    "tgt_run": tgt.run_id,
+                    "baseline_reveal_raw": raw.strip(),
+                    "baseline_canonical": canon,
+                    "original_reveal_canonical": tgt.reveal_canonical_id,
+                    "baseline_class_logits": class_logits,
+                })
     print(f"Baselines: {len(baseline_records)} runs in {time.time()-t0:.1f}s")
 
     # 2) Per-target anchor position. Tokenize the full reveal-ready context
     # and run `_find_anchors` to locate the chosen anchor's position.
     # Reuses capture-script logic so positions match those used during
-    # source-residual computation.
+    # source-residual computation. Skipped under --answer-rollout, where
+    # positions are recomputed per rollout step inside `_rollout_trial`.
     pos_index: dict[str, dict[str, int]] = {}
-    for tgt_class, runs in tgt_runs.items():
-        for tgt in runs:
-            inputs = _context_with_reveal(handle, tgt, bank, args.prompt_variant)
-            found = _find_anchors(handle.tokenizer, inputs["input_ids"])
-            if any(k.startswith("__DEBUG_") for k in found):
-                print(f"  failed anchor lookup for tgt {tgt.run_id}: {found}",
-                      file=sys.stderr)
-                continue
-            missing = [a for a in anchors if a not in found]
-            if missing:
-                print(f"  anchor(s) {missing} not found in tgt {tgt.run_id}",
-                      file=sys.stderr)
-                continue
-            pos_index[tgt.run_id] = {a: int(found[a]) for a in anchors}
+    if not args.answer_rollout:
+        for tgt_class, runs in tgt_runs.items():
+            for tgt in runs:
+                inputs = _context_with_reveal(handle, tgt, bank, args.prompt_variant)
+                found = _find_anchors(handle.tokenizer, inputs["input_ids"])
+                if any(k.startswith("__DEBUG_") for k in found):
+                    print(f"  failed anchor lookup for tgt {tgt.run_id}: {found}",
+                          file=sys.stderr)
+                    continue
+                missing = [a for a in anchors if a not in found]
+                if missing:
+                    print(f"  anchor(s) {missing} not found in tgt {tgt.run_id}",
+                          file=sys.stderr)
+                    continue
+                pos_index[tgt.run_id] = {a: int(found[a]) for a in anchors}
 
     # 3) Patched trials.
     patched_records: list[dict[str, Any]] = []
@@ -394,6 +602,39 @@ def main() -> int:
             for tgt_class in realized:
                 for tgt in tgt_runs[tgt_class]:
                     trial += 1
+                    if args.answer_rollout:
+                        roll = _rollout_trial(
+                            handle, tgt, bank, args.prompt_variant,
+                            anchors, layers, target_blocks,
+                            src_residuals_per_anchor,
+                            rollout_max_new_tokens=args.rollout_max_new_tokens,
+                            class_first_tok=class_first_tok,
+                        )
+                        if roll is None:
+                            print(f"  rollout failed for tgt {tgt.run_id}", file=sys.stderr)
+                            continue
+                        patched_records.append({
+                            "src_class": src_class,
+                            "src_run": src.run_id,
+                            "tgt_class": tgt_class,
+                            "tgt_run": tgt.run_id,
+                            "patched_reveal_raw": roll["reveal_raw"],
+                            "patched_canonical": roll["reveal_canonical"],
+                            "patched_class_logits": roll["class_logits"],
+                            "regen_answers_raw": roll["regen_answers_raw"],
+                            "regen_answers_bool": roll["regen_answers_bool"],
+                            "target_answers_bool": roll["target_answers_bool"],
+                            "answer_flip_mask": roll["answer_flip_mask"],
+                            "n_answer_flips": roll["n_answer_flips"],
+                        })
+                        if trial % 20 == 0 or trial == total_trials:
+                            print(f"  [{trial}/{total_trials}] "
+                                  f"src={src_class}/{src.run_id} "
+                                  f"tgt={tgt_class}/{tgt.run_id} → "
+                                  f"{roll['reveal_canonical']} "
+                                  f"(answer-flips={roll['n_answer_flips']})")
+                        continue
+
                     if tgt.run_id not in pos_index:
                         continue
                     positions = pos_index[tgt.run_id]  # {anchor: pos}
@@ -466,7 +707,7 @@ def main() -> int:
             ]
             mean_patch = sum(patch_diffs) / n if n else None
             mean_base = sum(base_diffs) / n if n else None
-            summaries[f"{src_class}->{tgt_class}"] = {
+            cell_summary = {
                 "n": n,
                 "flip_to_src": flip_to_src,
                 "kept_tgt": kept_tgt,
@@ -485,6 +726,37 @@ def main() -> int:
                     else None
                 ),
             }
+            if args.answer_rollout and n:
+                # Per-cell answer-flip stats. Subtract baseline non-determinism
+                # (each tgt's no-patch rollout flip count) to isolate the patch
+                # contribution.
+                patched_flips = [r["n_answer_flips"] for r in cell]
+                base_flips = [
+                    baseline_rollout[r["tgt_run"]]["n_answer_flips"]
+                    if r["tgt_run"] in baseline_rollout else 0
+                    for r in cell
+                ]
+                cell_summary["answer_flips_mean"] = sum(patched_flips) / n
+                cell_summary["answer_flips_baseline_mean"] = sum(base_flips) / n
+                cell_summary["answer_flips_delta_mean"] = (
+                    cell_summary["answer_flips_mean"]
+                    - cell_summary["answer_flips_baseline_mean"]
+                )
+                # Per-turn flip rate (fraction of trials where turn i answer flipped vs target).
+                per_turn_patched = [0, 0, 0, 0]
+                per_turn_baseline = [0, 0, 0, 0]
+                for r in cell:
+                    for i, f in enumerate(r["answer_flip_mask"][:4]):
+                        if f:
+                            per_turn_patched[i] += 1
+                    br = baseline_rollout.get(r["tgt_run"])
+                    if br is not None:
+                        for i, f in enumerate(br["answer_flip_mask"][:4]):
+                            if f:
+                                per_turn_baseline[i] += 1
+                cell_summary["per_turn_flip_rate_patched"] = [x / n for x in per_turn_patched]
+                cell_summary["per_turn_flip_rate_baseline"] = [x / n for x in per_turn_baseline]
+            summaries[f"{src_class}->{tgt_class}"] = cell_summary
 
     results = {
         "run_dir": str(run_dir),
@@ -494,6 +766,8 @@ def main() -> int:
         "anchors": anchors,
         "layers": layers,
         "prompt_variant": args.prompt_variant,
+        "answer_rollout": args.answer_rollout,
+        "rollout_max_new_tokens": args.rollout_max_new_tokens,
         "n_source_per_class": args.n_source_per_class,
         "n_target_per_class": args.n_target_per_class,
         "realized_classes": realized,
@@ -534,6 +808,20 @@ def main() -> int:
             d = s["logit_diff_delta"]
             row.append(f"{(d or 0):+7.2f} ")
         print("  " + " | ".join(row[0:1] + row[1:]))
+
+    if args.answer_rollout:
+        print()
+        print("Answer-flip-delta matrix (patched mean - baseline mean, out of 4 turns):")
+        print("Positive = patch shifts the model's regenerated answers vs no-patch rollout.")
+        print(header)
+        print("  " + "-" * (len(header) - 2))
+        for src_class in realized:
+            row = [f"  {src_class[:8]:>8} |"]
+            for tgt_class in realized:
+                s = summaries[f"{src_class}->{tgt_class}"]
+                d = s.get("answer_flips_delta_mean")
+                row.append(f"{(d or 0):+7.3f} ")
+            print("  " + " | ".join(row[0:1] + row[1:]))
     return 0
 
 
