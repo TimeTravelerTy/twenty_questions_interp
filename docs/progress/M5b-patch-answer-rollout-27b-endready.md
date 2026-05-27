@@ -156,11 +156,61 @@ head on 99.91% of answer slots. The decodable class direction at
 end_ready (LR LOO 0.508 @ L16) is epiphenomenal for the model's
 downstream behavior, not just for the reveal token.
 
+## Multi-anchor escalation (2026-05-28)
+
+Job 7779896: same band L14-L18 and same answer-rollout protocol, but
+anchors = `end_ready + end_model_q1..q4` (every "model-side" position
+in the dialogue). Hypothesis: if the model refreshes its class state
+at each model-turn residual, single-anchor end_ready patches get
+overwritten by the next answer's computation — patching all five
+positions installs source-class state continuously across the
+dialogue. Skipped full-residual L1-L62: replacing the entire running
+residual at one position is off-manifold (Heimersheim & Nanda flag
+this), so a positive there would be uninterpretable.
+
+Result: **virtually identical to single-anchor**.
+
+| metric | single (end_ready) | multi (+end_model_q1..4) |
+|---|---:|---:|
+| kept-target | 1007/1024 (98.3%) | 1007/1024 (98.3%) |
+| off-diagonal flip-to-source | 2/870 (0.23%) | 3/870 (0.34%) |
+| off-diagonal answer-flips | 3/3480 (0.086%) | 3/3480 (0.086%) |
+| baseline non-determinism | 0/32 | 0/32 |
+
+The one extra reveal flip is `cow → horse/attempt_593` (now 2/25
+instead of 1/25), with **0 answer flips** in both extra trials —
+i.e. it's the known attempt_593 reveal-fragility (M5 documented this
+target as splitting ~50/50 horse/cow regardless of source class)
+re-triggering under the slightly stronger intervention, not a
+patch-driven answer rerouting. The tiger/attempt_009 →
+shark/attempt_431 hit from the single-anchor run persists in
+multi-anchor with the same `[True, False, False, True]` regenerated
+answer pattern (3 of 4 flipped) — same trial, same mechanism, not
+amplified.
+
+The verdict: across two complementary protocol upgrades — (i) the
+answer-rollout fix to the teacher-forced-(Q,A) confound, and (ii)
+the multi-anchor extension across every model-side position —
+the patch null at L14-L18 holds. There is no per-turn refresh
+mechanism that multi-anchor would unmask: the signal at end_ready
+alone is the same signal at end_ready + every subsequent model
+anchor. M5b joins M5 in concluding that the linearly-decodable
+class direction at end_ready is epiphenomenal for the model's
+downstream behavior, full stop.
+
 ## Reproduction
 
 ```
 qsub -g tga-sip_arase jobs/tq_m5b_patch_27b_endready_rollout_L14-18_20260527.sh
 ```
 
-Output: [runs/m5b_patch_27b_default_endready_L14-18_rollout.json](../../runs/m5b_patch_27b_default_endready_L14-18_rollout.json).
+Outputs:
+- [runs/m5b_patch_27b_default_endready_L14-18_rollout.json](../../runs/m5b_patch_27b_default_endready_L14-18_rollout.json) (single-anchor, job 7779768)
+- [runs/m5b_patch_27b_default_multi_L14-18_rollout.json](../../runs/m5b_patch_27b_default_multi_L14-18_rollout.json) (multi-anchor, job 7779896)
+
 Code: [scripts/patch_anchor.py](../../scripts/patch_anchor.py) (`--answer-rollout`).
+
+Multi-anchor reproduction:
+```
+qsub -g tga-sip_arase jobs/tq_m5b_patch_27b_multi_rollout_L14-18_20260528.sh
+```
