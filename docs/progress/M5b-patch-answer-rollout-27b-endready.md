@@ -1,7 +1,56 @@
 # M5b — Answer-rollout patch at 27B end_ready
 
-**Status:** Job 7779618 submitted (2026-05-27, gpu_1 12h walltime). Result
-pending.
+**Status:** **DONE (2026-05-28).** Job 7779768 on gpu_1; 1024 patched
+trials + 32 baselines; 616s wall (model load ~6min). Result: **null on
+both axes, modulo one isolated tiger→shark trial.** End_ready L14-L18
+patch reroutes neither the model's regenerated answers nor the reveal,
+confirming the M5 "improvisation is scale-robust" headline against the
+stronger answer-rollout protocol.
+
+## Headline
+
+| metric | value |
+|---|---|
+| trials | 1024 (5 src/class × 5 tgt/class, 7 classes; shark has 2 kept tgts) |
+| baseline answer-flip non-determinism | 0/32 runs |
+| baseline reveal drift | 0/32 runs |
+| kept-target rate | 1007/1024 = **98.3%** |
+| off-diagonal flip-to-source | **2/870** (0.23%) |
+| off-diagonal answer-flips | **3/3480** answer slots (0.086%) |
+| answer-flips-delta-mean across all cells | 0.000 everywhere except tiger→shark (+0.300) |
+
+The aggregate is indistinguishable from a non-causal null: 99.8% of
+off-diagonal trials hold target class, and 99.91% of regenerated answer
+slots match the unperturbed manifest.
+
+## The one trial that moved
+
+A single off-diagonal cell shows movement:
+
+- **tiger source `attempt_009` → shark target `attempt_431`**: reveal
+  flipped to `tiger`, with **3/4** regenerated answers different from
+  the manifest target answers. The patch propagated into answer
+  behavior AND reached the reveal — exactly the mechanism the rollout
+  protocol was designed to detect.
+
+But it's a single trial out of 1024 and the structure of the
+neighborhood argues against generalisation:
+
+- attempt_431 is **not** broadly fragile. Patching it with cow/dog/
+  elephant/gorilla/horse sources (5 each, 25 trials) and with shark
+  self-patches (2) leaves it at shark every time. Only **tiger**
+  sources move it — and only 1 of 5 tiger sources at that.
+- The other shark target (`attempt_592`) is rock-solid: 0/32 trials
+  flipped under any source.
+- The matched control cell `cow→horse` also shows 1/25 (cow source
+  `attempt_561` into horse `attempt_586`) flip-to-source with **0**
+  answer flips, suggesting a baseline reveal-only fragility rather
+  than patch-driven answer rerouting.
+
+Net: tiger/attempt_009 → shark/attempt_431 is a class-specific 1-trial
+hit, not the kind of broad fragility attempt_593 exhibited in M5
+(which split 50/50 horse/cow under any source). It's interesting
+enough to flag but too sparse to call signal.
 
 ## The gap this fixes
 
@@ -78,31 +127,40 @@ Both axes matter:
 - Job 7779618 on gpu_1, 12h walltime (~5× the non-rollout cost).
 - Output: `runs/m5b_patch_27b_default_endready_L14-18_rollout.json`.
 
-## Escalation if null on both axes
+## Escalation decision
 
-1. Widen to L12–L20 (matches existing band-sweep range).
-2. Full-residual L1–L62 at end_ready.
-3. Multi-anchor end_ready + end_model_q1..q4.
+The pre-registered chain (L12-L20 → L1-L62 full → multi-anchor +
+end_model_q1..q4) was queued for the case of a strict null on both
+axes. The aggregate is effectively null: 99.91% of answer slots
+unchanged, 99.77% of off-diagonal reveals unchanged. The one
+tiger→shark/attempt_431 hit is not "this layer is causal"; it is
+one source-target pair whose entire neighborhood is otherwise null.
 
-Only escalate if the prior layer is null on BOTH answer-flip-delta AND
-reveal-flip-to-source. A nonzero answer-flip delta with null reveal
-flips is itself interesting (end_ready steers the answer head but the
-model re-recovers the original class) and would be worth its own
-writeup.
+**Not auto-escalating.** The right narrow follow-up is to widen the
+source pool for tiger-source patches into attempt_431 (single tgt ×
+20 src ≈ 20 trials, cheap) to see whether attempt_009 is
+idiosyncratic or tiger sources broadly dislodge attempt_431. That
+answers signal-vs-noise without spending another 10-min/1024-trial
+sweep — and the answer-flip-delta of 0 across all other 48 cells
+already says the broader layer band is not load-bearing.
 
-## Reading the result
+## Reading against M5
 
-Headline matrix to look at first: `answer_flips_delta_mean`,
-off-diagonal cells. Diagonal cells (self-patch) should be ~0; that's
-the within-class fragility control. Off-diagonal > 0 means the patched
-residual is shifting the model's regenerated answer behavior away
-from what the unperturbed target run produced.
+This *strengthens* the M5 headline. The prior M5 end_ready patch
+null could be dismissed as an artifact of teacher-forcing the
+target's visible (Q, A) history. Answer-rollout removes that
+confound: under per-turn answer regeneration the model still
+overwhelmingly re-derives the target class, and the patched
+residual at end_ready L14-L18 fails to bias its yes/no answer
+head on 99.91% of answer slots. The decodable class direction at
+end_ready (LR LOO 0.508 @ L16) is epiphenomenal for the model's
+downstream behavior, not just for the reveal token.
 
-Secondary matrix: `flip_to_src`. Off-diagonal > 0 means the patch
-reaches the reveal — load-bearing in the strong sense.
+## Reproduction
 
-If both are null, the M5 headline holds and strengthens: not only does
-end_ready not move the reveal, it doesn't even move the model's own
-answer choices to its own questions. The decodable class direction at
-end_ready is fully epiphenomenal for downstream behavior, not just for
-the reveal token.
+```
+qsub -g tga-sip_arase jobs/tq_m5b_patch_27b_endready_rollout_L14-18_20260527.sh
+```
+
+Output: [runs/m5b_patch_27b_default_endready_L14-18_rollout.json](../../runs/m5b_patch_27b_default_endready_L14-18_rollout.json).
+Code: [scripts/patch_anchor.py](../../scripts/patch_anchor.py) (`--answer-rollout`).
