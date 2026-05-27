@@ -173,6 +173,68 @@ def _context_with_reveal(
     return _build_chat_input_ids(handle, rendered, extra_turns=extra)
 
 
+# EOT-index mapping for v2 anchors. Used by the rollout path where
+# contexts are partial (fewer than 4 turns) and `_find_anchors` from
+# the capture script (which requires exactly 11 EOTs) bails. The
+# mapping mirrors `ANCHOR_LABELS_AT_EOT` order in capture_positional_residuals.py.
+_ANCHOR_EOT_INDEX = {
+    "end_user_prompt": 0,
+    "end_ready": 1,
+    "end_user_q1": 2,
+    "end_model_q1": 3,
+    "end_user_q2": 4,
+    "end_model_q2": 5,
+    "end_user_q3": 6,
+    "end_model_q3": 7,
+    "end_user_q4": 8,
+    "end_model_q4": 9,
+    "end_reveal_user": 10,
+}
+
+
+def _find_anchors_relaxed(
+    tokenizer: Any, input_ids: torch.Tensor, anchors: list[str]
+) -> dict[str, int] | None:
+    """Locate `anchors` by EOT-index, tolerating partial contexts.
+
+    For rollout: end_ready is always the 2nd EOT (index 1) regardless of
+    how many turns have been appended. pre_answer_qN is end_user_qN + 4.
+    pre_reveal_gen is the last position. Returns None if any requested
+    anchor isn't represented in the current input.
+    """
+    eot_id = tokenizer.convert_tokens_to_ids("<end_of_turn>")
+    if eot_id is None or eot_id == tokenizer.unk_token_id:
+        return None
+    ids = input_ids[0]
+    eot_positions = (ids == eot_id).nonzero(as_tuple=True)[0].tolist()
+    seq_len = int(ids.shape[0])
+    out: dict[str, int] = {}
+    for a in anchors:
+        if a == "pre_reveal_gen":
+            out[a] = seq_len - 1
+            continue
+        if a.startswith("pre_answer_q"):
+            n = int(a[-1])
+            eu_label = f"end_user_q{n}"
+            if eu_label not in _ANCHOR_EOT_INDEX:
+                return None
+            eu_idx = _ANCHOR_EOT_INDEX[eu_label]
+            if eu_idx >= len(eot_positions):
+                return None
+            pre_pos = int(eot_positions[eu_idx]) + 4
+            if pre_pos >= seq_len:
+                return None
+            out[a] = pre_pos
+            continue
+        if a not in _ANCHOR_EOT_INDEX:
+            return None
+        idx = _ANCHOR_EOT_INDEX[a]
+        if idx >= len(eot_positions):
+            return None
+        out[a] = int(eot_positions[idx])
+    return out
+
+
 def _build_rollout_context(
     handle: ModelHandle,
     manifest: RunManifest,
@@ -262,11 +324,11 @@ def _rollout_trial(
             handle, manifest, bank, prompt_variant,
             turn_qs[: i + 1], gen_answers_raw, include_reveal=False,
         )
-        found = _find_anchors(handle.tokenizer, inputs["input_ids"])
-        if any(k.startswith("__DEBUG_") for k in found):
+        found = _find_anchors_relaxed(handle.tokenizer, inputs["input_ids"], anchors)
+        if found is None:
             return None
         if src_residuals_per_anchor is not None:
-            valid = [a for a in anchors if a in found]
+            valid = list(found.keys())
             positions = {a: int(found[a]) for a in valid}
             seq_len = inputs["input_ids"].shape[1]
             if positions and max(positions.values()) >= seq_len:
