@@ -199,8 +199,13 @@ def _find_anchors_relaxed(
 
     For rollout: end_ready is always the 2nd EOT (index 1) regardless of
     how many turns have been appended. pre_answer_qN is end_user_qN + 4.
-    pre_reveal_gen is the last position. Returns None if any requested
-    anchor isn't represented in the current input.
+    pre_reveal_gen is the last position.
+
+    Returns a dict containing only the anchors actually present in the
+    current input. Missing anchors are silently skipped (multi-anchor
+    rollout: on step i, only end_ready and end_model_q{<i} have been
+    generated, so end_model_q{>=i} are skipped until later steps).
+    Returns None only if the tokenizer lacks `<end_of_turn>`.
     """
     eot_id = tokenizer.convert_tokens_to_ids("<end_of_turn>")
     if eot_id is None or eot_id == tokenizer.unk_token_id:
@@ -217,20 +222,20 @@ def _find_anchors_relaxed(
             n = int(a[-1])
             eu_label = f"end_user_q{n}"
             if eu_label not in _ANCHOR_EOT_INDEX:
-                return None
+                continue
             eu_idx = _ANCHOR_EOT_INDEX[eu_label]
             if eu_idx >= len(eot_positions):
-                return None
+                continue
             pre_pos = int(eot_positions[eu_idx]) + 4
             if pre_pos >= seq_len:
-                return None
+                continue
             out[a] = pre_pos
             continue
         if a not in _ANCHOR_EOT_INDEX:
-            return None
+            continue
         idx = _ANCHOR_EOT_INDEX[a]
         if idx >= len(eot_positions):
-            return None
+            continue
         out[a] = int(eot_positions[idx])
     return out
 
