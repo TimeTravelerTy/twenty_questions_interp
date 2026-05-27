@@ -160,6 +160,37 @@ distributed, epiphenomenal direction is exactly what you expect if the model
 is *improvising* the reveal from the dialogue rather than reading out a
 stored commitment.
 
+### Why "kept target under patch" is the prediction, not a puzzle
+
+Under greedy decoding (temperature 0), the *only* per-run randomness
+that distinguishes a horse-run from a tiger-run is the **permutation of
+the 20-candidate list** baked into the user prompt
+(`manifest.permutation`). Same model, same prompt template, different
+list ordering → different secret commitment. Question selection and
+yes/no answers downstream are deterministic consequences of that
+initial commitment, not independent variation. So the class identity
+is encoded in the *prompt itself* (which 20 animals, in what order),
+not just in the model's later residuals.
+
+A patch at one anchor (e.g. end_ready) replaces the residual at *one
+token position* in a few layers with source's residual. Everything
+else stays target's: the entire prompt's KV cache (with target's
+permutation), all later positions, and all unpatched layers at the
+patched position. When the model continues generating, attention at
+every later position can re-attend to the original target prompt and
+re-derive what the secret should be. The patched residual at end_ready
+propagates only via that single token's K/V entry — easily drowned
+out by the rest of the context.
+
+So "kept target under patch" isn't surprising; it's the prediction of
+the improvisation thesis. The interesting question M5 asked was
+whether the *legibly decodable* class direction at end_ready (LR
+0.508 @ L16) actually drives behavior, given that the prompt-level
+class identity is already fully present. The answer keeps coming
+back: no — that direction is a readout of the model's reasoning, not
+a hidden commitment that would survive being overwritten with another
+class's residual.
+
 ## Artifacts
 
 New this session:
