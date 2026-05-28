@@ -109,22 +109,97 @@ semantic-pair exception.
 
 ## Open follow-ups
 
-- **Ablate mode**: project the direction out at L16. Tests
-  *necessity* rather than sufficiency. If the model still reveals
-  the same class with the direction zeroed, the direction is fully
-  epiphenomenal.
-- **Layer sweep**: try L38 (pre_answer_q4 peak, LR 0.672) and L58
-  (pre_reveal_gen peak, LR 0.820 — the strongest probe signal
-  anywhere). Late-layer directions might be more causal.
-- **Larger α**: see when total breakdown happens. If α=30 produces
-  ~uniform random output, the L16 direction is purely additive
-  noise; if it produces clean flip-to-source, the issue was just
-  amplitude.
+- **Position-bisection of commitment formation**: between L16
+  end_ready (steering null) and L58 pre_reveal_gen (steering
+  positive), the model transitions from "summary in progress" to
+  "committed for readout." Steering with rollout at intermediate
+  anchors — `pre_answer_q1..q4` (LR LOO 0.574–0.672 @ L38), or at
+  `end_model_q4` — would locate the **earliest position where
+  steering flips the reveal**, which is when the model has actually
+  "decided." This is the more rigorous probe-direction-causality
+  story the project would want for the blog.
+- **Ablate mode at L16 with rollout**: necessity test. Project the
+  direction out at L16 across the whole rollout. If the model still
+  reveals the target, the direction is fully epiphenomenal in both
+  the sufficiency *and* necessity senses.
+- **Larger α at L16**: see when total breakdown happens. Drift→other
+  at α=10 is already 7.8%; α=30 would likely produce uniform-random
+  output without any clean flip-to-src, confirming that no amount
+  of L16 amplification can extract a commitment that isn't there.
 - **CCM** (Contrastive Causal Mediation,
   [ICLR 2025](https://openreview.net/forum?id=bUXa74EiOL)): the
-  modern method that explicitly avoids the off-distribution issue
-  via mediation analysis. Overkill for first pass but the rigorous
-  follow-up if a steering positive emerges.
+  rigorous modern alternative to raw steering, explicitly handles
+  the off-distribution concern via mediation analysis. Overkill for
+  the M5b null story, but worth knowing if the bisection step above
+  finds a positive somewhere mid-dialogue.
+
+## What this is and isn't evidence for
+
+**What M5b is evidence for** (in plain terms):
+1. The model does NOT hold the secret animal "in mind" the way a
+   human would — there's no early-formed commitment in the residual
+   at end_ready that propagates causally to the reveal.
+2. The class identity is encoded primarily in the prompt itself
+   (which 20 animals, in what order) and re-derived from prompt
+   context by attention at each later position.
+3. By the time we reach the literal pre-reveal position, the
+   model's last few layers do hold the class causally — that's the
+   readout assembly, not a stored commitment.
+
+**What M5b is NOT evidence for**:
+- That there's no commitment anywhere in the model's forward pass.
+  The L58 steering positive proves there IS a load-bearing class
+  direction late in the network. We just haven't localized where
+  the transition happens (see bisection follow-up).
+- That the probe directions are useless. The L58 probe at LR 0.820
+  successfully identifies a causally load-bearing direction; the
+  L16 probe identifies a summary-but-not-substrate direction.
+  Probes-as-readouts are valid; the warning is that probe accuracy
+  alone doesn't establish causality (Heimersheim & Nanda).
+
+## L16 steering with answer-rollout (the decisive null)
+
+**Job 7783019 (2026-05-28).** Same direction as the original L16 run
+but with `--answer-rollout` enabled and `--steer-scope from_anchor`
+(inject only at positions ≥ end_ready, leaving the prompt encoding
+untouched). The hook re-fires on every per-turn prefill, so the
+steering bias enters A_1..A_4 decoding at each step — the model
+gets to commit to or against the source direction across the
+dialogue, not just at the reveal-token logits.
+
+This fixes the same confound rollout fixed for patching: in the
+original L16 steering run the manifest's (Q, A) history was teacher-
+forced, so the model could re-derive class from visible answers and
+the steering only got one shot at the reveal-token logits.
+
+**Result: even more null than the non-rollout L16 steering.**
+
+| α | kept | flip→src | drift→other | answer-flip slots |
+|---|---:|---:|---:|---:|
+| 1.0 | 188/192 (97.9%) | **0/192 (0%)** | 4/192 (2.1%) | 0/768 (0%) |
+| 3.0 | 188/192 (97.9%) | 1/192 (0.5%) | 3/192 (1.6%) | 0/768 (0%) |
+| 10.0 | 175/192 (91.1%) | 2/192 (1.0%) | 15/192 (7.8%) | 3/768 (0.39%) |
+
+Baselines: 32/32 fully deterministic, 0 reveal drift, 0 answer
+flips. The only non-zero answer-flip cell is at α=10:
+`gorilla → shark/attempt_431 → reveal=tiger` (3/4 answers flipped,
+regenerated `[T,F,F,T]`). Same fragile target (`attempt_431`),
+same tiger attractor, same `[T,F,F,T]` fingerprint that surfaced
+under late-band multi-anchor patching. **A class-pair-specific
+fragility of one target, not a steering signal.**
+
+The cow→horse 20% at α=3,10 is still attempt_593-only (0 answer
+flips in both cases). The tiger→gorilla 20% at α=10 is a single
+trial.
+
+So the L16 direction is decisively epiphenomenal under the
+strongest available protocol: direct injection of `α·(μ_src − μ_tgt)`
+at the probe peak layer, scoped to positions ≥ end_ready, with
+rollout giving the steering 5 forward passes to bias the model's
+own decisions. **The model regenerates the same answers 99.6% of
+the time, and the reveal flips to source 0–1% of the time.** This
+directly answers the question "is the model committing to the
+class at end_ready in a way the probe direction captures?" — no.
 
 ## Steering at pre_reveal_gen L58 (the strongest probe peak)
 
@@ -149,20 +224,50 @@ the interpretation isn't "we found the load-bearing direction" —
 it's "the L58 contrastive direction at pre_reveal_gen is, by
 construction, the unembed direction for the class token."
 
-### Why L58 ≈ unembed
+### Why L58 flips and what it does / doesn't tell us
 
-The L58 residual at pre_reveal_gen passes through one final layer
-norm and the unembedding matrix to produce the reveal-token logits.
-The fact that an LR probe achieves 0.820 LOO accuracy from that
-residual means **the linear projection from L58 residual to class
-identity is nearly perfect** — i.e. the class direction in L58
-residual space is very close to the unembed direction for the class
-token. Adding `α·(μ_src − μ_tgt)` at that exact position+layer is
-essentially "add a vector that points toward the source-class token
-in unembed space." It would be surprising if it *didn't* flip.
+The L58 residual at pre_reveal_gen passes through **four more
+transformer blocks** (L59, L60, L61, L62) plus the final layer norm
+and the unembedding matrix to produce the reveal-token logits. So
+the L58 steering isn't directly perturbing the unembed input — the
+direction has to survive four blocks of nonlinear processing
+(attention, MLP) to still drive output. The fact that it broadly
+does (80% flip→src at α=3) is real evidence that the class signal
+at L58 is *causally* held in the last 4 layers in a way an additive
+direction can override.
 
-So the L58 positive isn't evidence of hidden commitment — it's a
-readout-layer perturbation that almost can't fail.
+But this **doesn't speak to early commitment**. The improvisation
+thesis (M4) and the M5 patch null at end_ready say: the model does
+not maintain a class-specific commitment in the residual at
+end_ready that propagates forward; instead, it re-derives class via
+attention over the prompt at every later position. By the time the
+model has reached `pre_reveal_gen` (the last token before reveal
+decoding), it has just finished that re-derivation — it has
+committed *now*, in the residual at that position, for the next
+~4 layers of readout processing. The L58 positive says exactly
+that: at the moment of readout, the class signal is held in the
+late residual. It doesn't say the model held it 4 turns ago at
+end_ready.
+
+Compare:
+- **End_ready L1-L62 full-residual patch (M5 7737409)**: replace
+  the *entire* residual stack at end_ready with a source's. Null.
+  The model recomputes.
+- **End_ready L16 steering with rollout (this work, 7783019)**:
+  add α·Δ at L16 across positions ≥ end_ready, throughout the
+  whole dialogue rollout. Null at the answer level (0–0.4% slots)
+  and the reveal level (0–1%).
+- **pre_reveal_gen L58 steering**: 80% reveal flip at α=3.
+
+The early-position null + late-position positive is consistent
+and tells a unified story: the model re-derives the class at each
+forward pass; the result of that re-derivation is increasingly
+decodable as you approach the output, and is held causally in the
+late residual just before readout. The probe at L16 is detecting a
+*summary* of an in-progress re-derivation that doesn't propagate;
+the probe at L58 is detecting the *finished* commitment that does
+drive the next 4 layers. (And steering at L58 confirms that probe
+points to a load-bearing direction at the late position.)
 
 ### Per-source-class pattern: not all directions are clean
 

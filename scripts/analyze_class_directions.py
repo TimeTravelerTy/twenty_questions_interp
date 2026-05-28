@@ -43,8 +43,13 @@ def main() -> int:
     # Load residuals per run at (anchor, layer).
     per_class: dict[str, list[torch.Tensor]] = defaultdict(list)
     n_files = 0
+    skipped = 0
     for pt in sorted(src_dir.glob("*.pt")):
-        d = torch.load(pt, map_location="cpu", weights_only=False)
+        try:
+            d = torch.load(pt, map_location="cpu", weights_only=False)
+        except (RuntimeError, EOFError) as e:
+            skipped += 1
+            continue
         cid = d.get("class")
         if cid is None:
             continue
@@ -58,7 +63,8 @@ def main() -> int:
         per_class[cid].append(resid[a_idx, args.layer].to(torch.float32))
         n_files += 1
     classes = sorted(per_class.keys())
-    print(f"Loaded {n_files} captures across {len(classes)} classes: "
+    print(f"Loaded {n_files} captures, skipped {skipped} corrupted, "
+          f"across {len(classes)} classes: "
           f"{ {c: len(per_class[c]) for c in classes} }")
 
     # Stack into X, y for LR.
@@ -83,8 +89,7 @@ def main() -> int:
         if len(set(y[mask])) < 2:
             continue
         clf = LogisticRegression(max_iter=2000, C=1.0,
-                                  class_weight="balanced",
-                                  multi_class="multinomial")
+                                  class_weight="balanced")
         clf.fit(X[mask], y[mask])
         pred = clf.predict(X[i:i+1])[0]
         true = y[i]
