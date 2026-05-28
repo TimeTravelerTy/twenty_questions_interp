@@ -95,6 +95,10 @@ def _rate(num: int, den: int) -> float | None:
     return None if den == 0 else num / den
 
 
+def _pct(value: float | None) -> str:
+    return "   n/a" if value is None else f"{100*value:5.1f}%"
+
+
 def _summarize_counts(counts: dict[str, int]) -> dict[str, Any]:
     slots = counts.get("slots", 0)
     parsed = counts.get("parsed_slots", 0)
@@ -168,19 +172,23 @@ def main() -> int:
     for alpha, s in result["by_alpha"].items():
         print(
             f"{float(alpha):>4.1f} | "
-            f"{100*s['source_target_different_rate']:5.1f}% | "
-            f"{100*s['match_source_diagnostic_rate']:10.1f}% | "
-            f"{100*s['match_target_diagnostic_rate']:10.1f}% | "
-            f"{100*s['match_source_all_rate']:9.1f}% | "
-            f"{100*s['match_target_all_rate']:9.1f}%"
+            f"{_pct(s['source_target_different_rate']):>6} | "
+            f"{_pct(s['match_source_diagnostic_rate']):>11} | "
+            f"{_pct(s['match_target_diagnostic_rate']):>11} | "
+            f"{_pct(s['match_source_all_rate']):>10} | "
+            f"{_pct(s['match_target_all_rate']):>10}"
         )
 
     print("\nReveal-to-source subset: source@diag / target@diag")
-    for alpha, s in result["by_alpha_reveal_source"].items():
+    for alpha in result["by_alpha"]:
+        s = result["by_alpha_reveal_source"].get(alpha)
+        if s is None:
+            print(f"{float(alpha):>4.1f}:    n/a /    n/a")
+            continue
         print(
             f"{float(alpha):>4.1f}: "
-            f"{100*s['match_source_diagnostic_rate']:5.1f}% / "
-            f"{100*s['match_target_diagnostic_rate']:5.1f}%"
+            f"{_pct(s['match_source_diagnostic_rate'])} / "
+            f"{_pct(s['match_target_diagnostic_rate'])}"
         )
     return 0
 
