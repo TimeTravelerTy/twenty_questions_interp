@@ -107,31 +107,31 @@ A *null* under this protocol is therefore decisive ("even injecting
 the off-distribution caveat. Our result is decisive null with one
 semantic-pair exception.
 
-## Open follow-ups
+## Follow-up: position bisection completed
 
-- **Position-bisection of commitment formation**: between L16
-  end_ready (steering null) and L58 pre_reveal_gen (steering
-  positive), the model transitions from "summary in progress" to
-  "committed for readout." Steering with rollout at intermediate
-  anchors — `pre_answer_q1..q4` (LR LOO 0.574–0.672 @ L38), or at
-  `end_model_q4` — would locate the **earliest position where
-  steering flips the reveal**, which is when the model has actually
-  "decided." This is the more rigorous probe-direction-causality
-  story the project would want for the blog.
-- **Ablate mode at L16 with rollout**: necessity test. Project the
-  direction out at L16 across the whole rollout. If the model still
-  reveals the target, the direction is fully epiphenomenal in both
-  the sufficiency *and* necessity senses.
-- **Larger α at L16**: see when total breakdown happens. Drift→other
-  at α=10 is already 7.8%; α=30 would likely produce uniform-random
-  output without any clean flip-to-src, confirming that no amount
-  of L16 amplification can extract a commitment that isn't there.
-- **CCM** (Contrastive Causal Mediation,
-  [ICLR 2025](https://openreview.net/forum?id=bUXa74EiOL)): the
-  rigorous modern alternative to raw steering, explicitly handles
-  the off-distribution concern via mediation analysis. Overkill for
-  the M5b null story, but worth knowing if the bisection step above
-  finds a positive somewhere mid-dialogue.
+The open bisection has now been run. See
+`docs/progress/M5b-steering-position-bisection-27b.md` for the full
+table. Headline:
+
+| anchor | layer | best/representative result |
+|---|---:|---|
+| end_ready | L16 | α=10: 1.0% flip→src |
+| pre_answer_q1 | L38 | α=3: 35.4% flip→src |
+| pre_answer_q2 | L61 | α=10: 61.5% flip→src |
+| pre_answer_q3 | L38 | α=10: 56.8% flip→src |
+| pre_answer_q4 | L38 | α=3: 70.3% flip→src |
+| pre_reveal_gen | L58 | α=3: 80.2% flip→src |
+
+So the transition is not "only at the final reveal token." It is
+already present by the first pre-answer position and becomes cleaner
+by turn 4. The end_ready null remains the critical setup-time result:
+the model has a readable but non-load-bearing class summary at setup
+completion. Once the dialogue trajectory begins, larger class-aligned
+directions form and can steer the reveal.
+
+Remaining optional follow-ups are no longer blockers for the blog:
+ablate-mode tests, higher α breakdown curves, and CCM-style mediation
+would refine the mechanism, but the main sufficiency story is closed.
 
 ## Per-class probe accuracy validates the per-source steering pattern
 
@@ -395,6 +395,10 @@ class signal.
 ## Artifacts
 
 - Code: [scripts/steer_class_direction.py](../../scripts/steer_class_direction.py)
+- Bisection writeup: `docs/progress/M5b-steering-position-bisection-27b.md`
+- Answer-consistency code: [scripts/analyze_steering_answer_consistency.py](../../scripts/analyze_steering_answer_consistency.py)
 - L16 steering output: `runs/m5b_steer_27b_default_endready_L16_add.json` (job 7782428, gpu_1, 77s steered + 6min model load)
+- L16 rollout steering output: `runs/m5b_steer_27b_default_endready_L16_add_from_anchor_rollout.json` (job 7783019)
+- q1-q4 rollout steering outputs: `runs/m5b_steer_27b_default_pa{1,2,3,4}_*.json` (jobs 7783903, 7783776, 7783603, 7783472)
 - L58 steering output: `runs/m5b_steer_27b_default_prereveal_L58_add_from_anchor.json` (job 7782821, gpu_1, 464s steered + 5min model load)
 - Per-class probe analysis (queued as 7782923): `runs/m5b_class_dirs_27b_*.json` — used to validate the per-source steering pattern matches per-class probe accuracy.
