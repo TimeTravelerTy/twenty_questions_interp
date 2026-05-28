@@ -64,12 +64,15 @@ from capture_positional_residuals import _find_anchors  # noqa: E402
 from patch_anchor import (  # noqa: E402
     V2_ANCHOR_LABELS,
     _build_class_first_token_ids,
+    _build_rollout_context,
     _context_with_reveal,
+    _find_anchors_relaxed,
     _generate_reveal_greedy,
     _group_by_class,
     _load_kept_manifests,
     _locate_layer_list,
 )
+from twenty_q.dialogue import parse_yes_no  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,6 +106,14 @@ def parse_args() -> argparse.Namespace:
                    choices=["float32", "bfloat16", "float16"])
     p.add_argument("--prompt-variant", default="default")
     p.add_argument("--out-json", required=True)
+    p.add_argument("--answer-rollout", action="store_true",
+                   help="If set, regenerate each turn's yes/no answer under "
+                        "the steering hook (same pattern as patch_anchor.py "
+                        "--answer-rollout). The steering hook re-fires on "
+                        "every per-turn prefill, biasing A_i decoding under "
+                        "the steered residual. Reveal is generated after A_4. "
+                        "Tracks answer flips vs the manifest target answers.")
+    p.add_argument("--rollout-max-new-tokens", type=int, default=8)
     return p.parse_args()
 
 
@@ -177,6 +188,82 @@ def _make_steer_hook(
     return hook
 
 
+def _steer_rollout_trial(
+    handle: ModelHandle,
+    manifest: RunManifest,
+    bank: Any,
+    prompt_variant: str,
+    steer_block: Any,
+    direction: torch.Tensor,
+    alpha: float,
+    mode: str,
+    direction_anchor: str,
+    steer_scope: str,
+    rollout_max_new_tokens: int,
+    class_first_tok: dict[str, int],
+) -> dict[str, Any] | None:
+    """Same per-turn loop as patch_anchor._rollout_trial but the
+    intervention is a steering hook on `steer_block` rather than a
+    position-patch. The hook fires on every per-turn prefill (and on
+    decode), so the steering bias enters A_i decoding at each step
+    and propagates via the regenerated answer text."""
+    turn_qs = [t.question_text for t in manifest.turns]
+    target_answers_bool = [t.answer_bool for t in manifest.turns]
+    target_answers_raw = [t.raw_model_output.strip() for t in manifest.turns]
+    gen_answers_raw: list[str] = []
+    gen_answers_bool: list[bool | None] = []
+
+    def _apply_and_decode(inputs, max_new):
+        # start_pos for scope=from_anchor: re-locate the anchor in this prefix.
+        start_pos = None
+        if steer_scope == "from_anchor":
+            found = _find_anchors_relaxed(
+                handle.tokenizer, inputs["input_ids"], [direction_anchor]
+            )
+            if found and direction_anchor in found:
+                start_pos = int(found[direction_anchor])
+        h = steer_block.register_forward_hook(
+            _make_steer_hook(direction, alpha, mode, start_pos)
+        )
+        try:
+            return _generate_reveal_greedy(handle, inputs, max_new_tokens=max_new)
+        finally:
+            h.remove()
+
+    for i in range(len(turn_qs)):
+        inputs = _build_rollout_context(
+            handle, manifest, bank, prompt_variant,
+            turn_qs[: i + 1], gen_answers_raw, include_reveal=False,
+        )
+        raw_ans, _ = _apply_and_decode(inputs, rollout_max_new_tokens)
+        gen_answers_raw.append(raw_ans.strip())
+        gen_answers_bool.append(parse_yes_no(raw_ans))
+
+    inputs = _build_rollout_context(
+        handle, manifest, bank, prompt_variant,
+        turn_qs, gen_answers_raw, include_reveal=True,
+    )
+    raw_reveal, first_logits = _apply_and_decode(inputs, 48)
+    canon = parse_reveal_to_canonical(raw_reveal, bank)
+    class_logits = {cid: float(first_logits[tid])
+                    for cid, tid in class_first_tok.items()}
+    answer_flips = [
+        (gb is not None and tb is not None and gb != tb)
+        for gb, tb in zip(gen_answers_bool, target_answers_bool)
+    ]
+    return {
+        "regen_answers_raw": gen_answers_raw,
+        "regen_answers_bool": gen_answers_bool,
+        "target_answers_raw": target_answers_raw,
+        "target_answers_bool": target_answers_bool,
+        "answer_flip_mask": answer_flips,
+        "n_answer_flips": sum(answer_flips),
+        "reveal_raw": raw_reveal.strip(),
+        "reveal_canonical": canon,
+        "class_logits": class_logits,
+    }
+
+
 def main() -> int:
     args = parse_args()
     run_dir = Path(args.run_dir).resolve()
@@ -225,27 +312,52 @@ def main() -> int:
         c: by_class[c][-args.n_target_per_class:] for c in realized
     }
 
-    # 1) Baselines (no steering).
-    print("Computing baselines (no steering) ...")
+    # 1) Baselines.
+    print(f"Computing baselines (rollout={args.answer_rollout}) ...")
     baseline_records = []
     baseline_class_logits: dict[str, dict[str, float]] = {}
+    baseline_rollout: dict[str, dict[str, Any]] = {}
     t0 = time.time()
     for tgt_class, runs in tgt_runs.items():
         for tgt in runs:
-            inputs = _context_with_reveal(handle, tgt, bank, args.prompt_variant)
-            raw, first_logits = _generate_reveal_greedy(handle, inputs)
-            canon = parse_reveal_to_canonical(raw, bank)
-            class_logits = {cid: float(first_logits[tid])
-                            for cid, tid in class_first_tok.items()}
-            baseline_class_logits[tgt.run_id] = class_logits
-            baseline_records.append({
-                "tgt_class": tgt_class,
-                "tgt_run": tgt.run_id,
-                "baseline_reveal_raw": raw.strip(),
-                "baseline_canonical": canon,
-                "original_reveal_canonical": tgt.reveal_canonical_id,
-                "baseline_class_logits": class_logits,
-            })
+            if args.answer_rollout:
+                # Zero direction → hook is no-op; equivalent to no steering.
+                roll = _steer_rollout_trial(
+                    handle, tgt, bank, args.prompt_variant,
+                    steer_block, torch.zeros_like(next(iter(means.values()))),
+                    0.0, "add", args.direction_anchor, args.steer_scope,
+                    args.rollout_max_new_tokens, class_first_tok,
+                )
+                if roll is None:
+                    continue
+                baseline_class_logits[tgt.run_id] = roll["class_logits"]
+                baseline_rollout[tgt.run_id] = roll
+                baseline_records.append({
+                    "tgt_class": tgt_class,
+                    "tgt_run": tgt.run_id,
+                    "baseline_reveal_raw": roll["reveal_raw"],
+                    "baseline_canonical": roll["reveal_canonical"],
+                    "original_reveal_canonical": tgt.reveal_canonical_id,
+                    "baseline_class_logits": roll["class_logits"],
+                    "baseline_regen_answers_bool": roll["regen_answers_bool"],
+                    "target_answers_bool": roll["target_answers_bool"],
+                    "baseline_n_answer_flips": roll["n_answer_flips"],
+                })
+            else:
+                inputs = _context_with_reveal(handle, tgt, bank, args.prompt_variant)
+                raw, first_logits = _generate_reveal_greedy(handle, inputs)
+                canon = parse_reveal_to_canonical(raw, bank)
+                class_logits = {cid: float(first_logits[tid])
+                                for cid, tid in class_first_tok.items()}
+                baseline_class_logits[tgt.run_id] = class_logits
+                baseline_records.append({
+                    "tgt_class": tgt_class,
+                    "tgt_run": tgt.run_id,
+                    "baseline_reveal_raw": raw.strip(),
+                    "baseline_canonical": canon,
+                    "original_reveal_canonical": tgt.reveal_canonical_id,
+                    "baseline_class_logits": class_logits,
+                })
     print(f"  baselines: {len(baseline_records)} in {time.time()-t0:.1f}s")
 
     # 2) Anchor position per target (for steer-scope=from_anchor).
@@ -276,6 +388,35 @@ def main() -> int:
         for alpha in alphas:
             for tgt in tgt_runs[tgt_class]:
                 trial += 1
+                if args.answer_rollout:
+                    roll = _steer_rollout_trial(
+                        handle, tgt, bank, args.prompt_variant,
+                        steer_block, direction, alpha, args.mode,
+                        args.direction_anchor, args.steer_scope,
+                        args.rollout_max_new_tokens, class_first_tok,
+                    )
+                    if roll is None:
+                        continue
+                    steered_records.append({
+                        "src_class": src_class,
+                        "tgt_class": tgt_class,
+                        "tgt_run": tgt.run_id,
+                        "alpha": alpha,
+                        "direction_norm": float(direction.norm()),
+                        "steered_reveal_raw": roll["reveal_raw"],
+                        "steered_canonical": roll["reveal_canonical"],
+                        "steered_class_logits": roll["class_logits"],
+                        "regen_answers_bool": roll["regen_answers_bool"],
+                        "target_answers_bool": roll["target_answers_bool"],
+                        "answer_flip_mask": roll["answer_flip_mask"],
+                        "n_answer_flips": roll["n_answer_flips"],
+                    })
+                    if trial % 25 == 0 or trial == total:
+                        print(f"  [{trial}/{total}] {src_class}->{tgt_class} α={alpha} "
+                              f"tgt={tgt.run_id} → {roll['reveal_canonical']} "
+                              f"(af={roll['n_answer_flips']})")
+                    continue
+
                 start_pos = pos_index.get(tgt.run_id) if args.steer_scope == "from_anchor" else None
                 inputs = _context_with_reveal(handle, tgt, bank, args.prompt_variant)
                 hook_h = steer_block.register_forward_hook(
