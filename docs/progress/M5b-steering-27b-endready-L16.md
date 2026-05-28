@@ -133,6 +133,66 @@ semantic-pair exception.
   the M5b null story, but worth knowing if the bisection step above
   finds a positive somewhere mid-dialogue.
 
+## Per-class probe accuracy validates the per-source steering pattern
+
+Local LR LOO analysis at end_ready L16 across the v2 capture
+(6 classes — shark missing from local scp; chance = 1/6 = 0.167):
+
+| class | per-class LR LOO | n runs |
+|---|---:|---:|
+| horse | **0.590** | 139 |
+| tiger | **0.567** | 120 |
+| gorilla | 0.429 | 14 |
+| cow | 0.290 | 31 |
+| elephant | 0.167 | 36 |
+| dog | 0.158 | 19 |
+
+Two cross-checks fall out cleanly:
+
+**(1) L58 per-source steering cleanness matches per-class L16 probe
+accuracy.** At α=3, the source classes that drove 100% flip→src
+were **horse** and **tiger** — exactly the two highest per-class LR
+classes. cow/dog/elephant/gorilla at 93% (with horse leakage)
+matches their lower per-class accuracy. The contrastive direction's
+ability to drive output is bounded by how well the class is
+linearly represented at the probe layer.
+
+**(2) Predicted-most-steerable pair = the only L16 cell with
+α-dependence.** The heuristic `avg(per_class_acc) × direction_norm`
+ranks pairs ex-ante:
+
+```
+tiger ↔ gorilla   score=5.11  dir_norm=10.27  acc(0.57, 0.43)  ← top
+gorilla ↔ horse   score=5.01  dir_norm= 9.84  acc(0.43, 0.59)
+cow ↔ gorilla     score=3.70
+...
+```
+
+The **tiger → gorilla** cell — top of the predicted ranking — is
+the *only* L16 steering cell that showed monotonic α-dependence
+(0/5 → 1/5 → 2/5 flip→tiger as α=1→3→10). Tiger and gorilla are
+both large mammals; the contrastive direction at L16 has the
+clearest semantically-meaningful structure, and even *that*
+direction's steering peaks at 40% (2/5 trials) at α=10 in the
+original (non-rollout) run, and at 20% (1/5) under rollout. So
+even the predicted-strongest L16 direction only weakly causes
+flips.
+
+**Net**: per-class probe accuracy is the right ex-ante predictor
+for which directions will be "clean" under steering, and even the
+predicted-best L16 direction is causally weak. Classes whose probe
+direction overlaps with the unembed token direction (the L58 case)
+steer broadly; classes whose direction is just an intermediate
+summary (the L16 case) don't, even at α=10. The model isn't holding
+any class in a way that L16 perturbation can dislodge.
+
+(Note: shark missing from this analysis because alphabetical scp
+of the v2 captures was killed before reaching attempt_431/592.
+The L58 steering result confirms shark direction *does* flip at
+α=1 — consistent with the high direction-norm structure of the
+shark contrastive direction; analysis can be re-run with full
+captures locally.)
+
 ## What this is and isn't evidence for
 
 **What M5b is evidence for** (in plain terms):
