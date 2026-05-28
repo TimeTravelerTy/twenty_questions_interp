@@ -188,6 +188,32 @@ def _make_steer_hook(
     return hook
 
 
+def _rollout_anchor_start_pos(
+    handle: ModelHandle, input_ids: torch.Tensor, direction_anchor: str
+) -> int | None:
+    """Return the anchor position in a partial rollout context, if present.
+
+    Missing means "do not steer this forward pass yet" for `from_anchor`
+    rollout. This matters for late anchors such as `pre_answer_q4`: before
+    Q4 exists, steering all positions would silently turn the run into an
+    `all`-scope intervention. `pre_reveal_gen` is only present once the
+    reveal user turn exists; otherwise every partial prefix has a misleading
+    "last token" position.
+    """
+    if direction_anchor == "pre_reveal_gen":
+        reveal_ready = _find_anchors_relaxed(
+            handle.tokenizer, input_ids, ["end_reveal_user"]
+        )
+        if not reveal_ready or "end_reveal_user" not in reveal_ready:
+            return None
+    found = _find_anchors_relaxed(
+        handle.tokenizer, input_ids, [direction_anchor]
+    )
+    if not found or direction_anchor not in found:
+        return None
+    return int(found[direction_anchor])
+
+
 def _steer_rollout_trial(
     handle: ModelHandle,
     manifest: RunManifest,
@@ -217,11 +243,11 @@ def _steer_rollout_trial(
         # start_pos for scope=from_anchor: re-locate the anchor in this prefix.
         start_pos = None
         if steer_scope == "from_anchor":
-            found = _find_anchors_relaxed(
-                handle.tokenizer, inputs["input_ids"], [direction_anchor]
+            start_pos = _rollout_anchor_start_pos(
+                handle, inputs["input_ids"], direction_anchor
             )
-            if found and direction_anchor in found:
-                start_pos = int(found[direction_anchor])
+            if start_pos is None:
+                return _generate_reveal_greedy(handle, inputs, max_new_tokens=max_new)
         h = steer_block.register_forward_hook(
             _make_steer_hook(direction, alpha, mode, start_pos)
         )
