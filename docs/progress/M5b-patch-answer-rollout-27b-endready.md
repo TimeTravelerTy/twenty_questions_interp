@@ -198,6 +198,44 @@ anchor. M5b joins M5 in concluding that the linearly-decodable
 class direction at end_ready is epiphenomenal for the model's
 downstream behavior, full stop.
 
+## Late-band multi-anchor escalation (L35-L45, 2026-05-28)
+
+Job 7782327: same multi-anchor set and rollout protocol as 7779896,
+but the layer band is moved to **L35-L45** — the depth where the
+probe table peaks (`pre_answer_q4` LR 0.672 @ L38). Tests whether
+the commitment is held in a late-layer state that gets refreshed at
+each model turn, rather than initialized at end_ready.
+
+Aggregate: marginally more movement, still overwhelmingly null.
+
+| metric | L14-L18 multi | **L35-L45 multi** |
+|---|---:|---:|
+| kept-target | 1007/1024 (98.3%) | 1002/1024 (97.9%) |
+| off-diag flip-to-source | 3/870 (0.34%) | 6/870 (0.69%) |
+| off-diag answer-flips | 3/3480 (0.086%) | 6/3480 (0.17%) |
+| baseline non-determinism | 0/32 | 0/32 |
+
+The new movement is class-pair-specific and concentrated on the
+known fragile target **shark/attempt_431**:
+
+- `elephant → shark/attempt_431`: reveal flipped to **tiger** (not
+  source class elephant or target shark), 3/4 answer flips,
+  regenerated answers `[True, False, False, True]`.
+- `tiger → shark/attempt_431`: same pattern — reveal to tiger, 3/4
+  answer flips, same regenerated-answer fingerprint.
+- `cow → horse`: 5/25 reveals to cow with **0 answer flips** in
+  every case; all five trials hit `attempt_593` — the boundary-
+  degenerate horse target M5 documented.
+
+The shark/attempt_431 result is the interesting one: under late-band
+multi-anchor patches it has a hidden **"tiger" attractor** that any
+large-mammal source (tiger AND elephant) unlocks via the same
+answer-flip pattern. This is a *class-pair* effect, not a general
+"shark is fragile" effect — attempt_592 (the other shark target) is
+0/32 under any source. Suggests late-layer multi-anchor patches do
+expose a narrow off-manifold pull toward a single attractor class
+for one specific target, but not broad causal control of the reveal.
+
 ## Reproduction
 
 ```
