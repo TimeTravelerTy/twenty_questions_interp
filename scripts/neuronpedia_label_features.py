@@ -100,9 +100,11 @@ def fetch_feature(base: str, model: str, source: str, idx: int,
                   n_exemplars: int) -> dict:
     url = f"{base}/api/feature/{model}/{source}/{idx}"
     data = _http_get(url, _headers())
-    out: dict = {"index": idx, "label": None, "exemplars": []}
+    out: dict = {"index": idx, "label": None, "exemplars": [],
+                 "np_max_act": None}
     if not isinstance(data, dict):
         return out
+    out["np_max_act"] = data.get("maxActApprox")
     expls = data.get("explanations") or []
     if expls:
         out["label"] = expls[0].get("description")
@@ -177,12 +179,16 @@ def main() -> int:
 
     def _print_table(title: str, ranking: list[int]) -> None:
         print(f"\n=== {title} (top {args.top_n}) ===")
-        print(f"{'feat':>7} {'mean_act':>9} {'fire%':>6} {'act|fire':>9}  label")
+        print(f"{'feat':>7} {'mean_act':>9} {'fire%':>6} {'act|fire':>9} "
+              f"{'NPmax':>8}  label")
         for fid in ranking[: args.top_n]:
-            lab = (label_map.get(fid) or {}).get("label") or ""
+            info = label_map.get(fid) or {}
+            lab = info.get("label") or ""
+            npmax = info.get("np_max_act")
+            npmax_s = f"{npmax:>8.1f}" if isinstance(npmax, (int, float)) else f"{'?':>8}"
             print(f"{fid:>7} {mean_act[fid]:>9.3f} "
-                  f"{100*fire_freq[fid]:>5.1f}% {mean_act_when_fire[fid]:>9.3f}"
-                  f"  {lab[:70]}")
+                  f"{100*fire_freq[fid]:>5.1f}% {mean_act_when_fire[fid]:>9.3f} "
+                  f"{npmax_s}  {lab[:62]}")
 
     _print_table("Features by MEAN ACTIVATION at " + args.anchor, by_mean)
     _print_table("Features by FIRING FREQUENCY at " + args.anchor, by_freq)
@@ -203,6 +209,7 @@ def main() -> int:
                 "fire_freq": fire_freq[f],
                 "mean_act_when_fire": mean_act_when_fire[f],
                 "label": (label_map.get(f) or {}).get("label"),
+                "np_max_act": (label_map.get(f) or {}).get("np_max_act"),
                 "exemplars": (label_map.get(f) or {}).get("exemplars", []),
             }
             for f in union
