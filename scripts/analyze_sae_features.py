@@ -54,6 +54,9 @@ def parse_args() -> argparse.Namespace:
                         "balanced 20/class LR LOO).")
     p.add_argument("--seed", type=int, default=0,
                    help="RNG seed for --balance subsampling.")
+    p.add_argument("--drop-class", nargs="+", default=None,
+                   help="Class name(s) to exclude (e.g. degenerate 'shark' "
+                        "with too few samples to balance/LOO).")
     p.add_argument("--out", required=True, help="Output JSON path.")
     return p.parse_args()
 
@@ -198,6 +201,10 @@ def main() -> int:
     print(f"Loaded {len(records)} firing records from {args.firings}")
     if args.anchor:
         print(f"Filtering to anchor={args.anchor}")
+    if args.drop_class:
+        before = len(records)
+        records = [r for r in records if str(r["class"]) not in set(args.drop_class)]
+        print(f"Dropped classes {args.drop_class}: {before} -> {len(records)} records")
 
     X, class_names, y, run_ids, d_sae_observed, feat_ids = _build_sparse_matrix(
         records, anchor=args.anchor, balance=args.balance, seed=args.seed,

@@ -46,6 +46,9 @@ def parse_args() -> argparse.Namespace:
                         "Default = all 49 layers. Centroids are stored for ALL layers regardless.")
     p.add_argument("--min-class-count", type=int, default=5,
                    help="Warn if any class has fewer kept runs than this.")
+    p.add_argument("--drop-class", nargs="+", default=None,
+                   help="Class name(s) to exclude entirely (e.g. degenerate "
+                        "'shark' with too few samples to LOO).")
     return p.parse_args()
 
 
@@ -89,6 +92,11 @@ def main() -> int:
             return 2
         file_class.append((p, d["class"], d["run_id"]))
         del d
+    if args.drop_class:
+        before = len(file_class)
+        drop = set(args.drop_class)
+        file_class = [fc for fc in file_class if fc[1] not in drop]
+        print(f"Dropped classes {sorted(drop)}: {before} -> {len(file_class)} runs")
     classes_present = sorted({c for _, c, _ in file_class})
     counts_full = {c: sum(1 for _, cc, _ in file_class if cc == c) for c in classes_present}
     print(f"Classes (all loaded): {classes_present}  counts: {counts_full}")
