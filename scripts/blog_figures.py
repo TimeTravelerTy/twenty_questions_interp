@@ -110,6 +110,10 @@ if Path(fp).exists():
                         fontsize=7, color=("white" if Mn[i, j] > 0.6 else "#b03048"))
     ax.set_title("Which SAE features fire, by game position",
                  loc="left", fontsize=13, pad=10)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03,
+                        ticks=[0, 1])
+    cbar.ax.set_yticklabels(["silent", "peak"], fontsize=9)
+    cbar.set_label("feature activation\n(normalized per feature)", fontsize=9)
     fig.tight_layout(); fig.savefig(OUT / "fig3_features_by_turn.png",
                                     bbox_inches="tight")
 
