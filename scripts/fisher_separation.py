@@ -55,8 +55,10 @@ def main():
         res = d["residuals"]  # (n_anchors, n_layers, hidden) fp32
         for (anc, lay) in cells:
             ai = anchor_labels.index(anc)
-            v = res[ai, lay, :].float().numpy()
+            # .copy() breaks the view into `res` so the 21MB/file tensor frees.
+            v = np.array(res[ai, lay, :].float().numpy(), copy=True)
             by_cell[(anc, lay)].setdefault(cls, []).append(v)
+        del d, res
 
     for cell in cells:
         anc, lay = cell
