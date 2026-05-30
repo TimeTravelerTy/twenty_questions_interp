@@ -70,4 +70,47 @@ ax.text(5, 86, "positive control\n(near readout)", ha="center", fontsize=8.5,
         color="#777")
 fig.tight_layout(); fig.savefig(OUT / "fig2_steering.png", bbox_inches="tight")
 
+# ---- Fig 3: SAE features light up per question (heatmap, L40 firings) ----
+import numpy as np
+import torch
+fp = "runs/m5_sae_firings_27b_default_resid_post_L40_qanchors.pt"
+if Path(fp).exists():
+    p = torch.load(fp, map_location="cpu", weights_only=False)
+    ancs = ["end_ready", "pre_answer_q1", "pre_answer_q2",
+            "pre_answer_q3", "pre_answer_q4"]
+    col_lab = ["Ready", "Q1\nmammal?", "Q2\nbird?", "Q3\nwater?", "Q4\n4 legs?"]
+    rows = [(1411, "formatting (tags / delimiters)"),
+            (12997, "affirmation  /  “Yes”"),
+            (40663, "negation  /  “No”"),
+            (39714, "“mammals”"),
+            (16560, "“animal biology”"),
+            (10593, "“how it walks”")]
+    M = np.zeros((len(rows), len(ancs)))
+    sums = {(fid, a): 0.0 for fid, _ in rows for a in ancs}
+    for r in p["records"]:
+        a = r["anchor"]
+        if a not in ancs:
+            continue
+        d = dict(zip(r["feature_idx"].tolist(), r["activation"].tolist()))
+        for fid, _ in rows:
+            sums[(fid, a)] += d.get(fid, 0.0)
+    for i, (fid, _) in enumerate(rows):
+        for j, a in enumerate(ancs):
+            M[i, j] = sums[(fid, a)] / 600.0
+    Mn = M / M.max(axis=1, keepdims=True).clip(min=1e-9)  # per-row normalize
+    fig, ax = plt.subplots(figsize=(7.2, 4.4))
+    im = ax.imshow(Mn, cmap="Reds", aspect="auto", vmin=0, vmax=1)
+    ax.set_xticks(range(len(ancs))); ax.set_xticklabels(col_lab, fontsize=10)
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels([lab for _, lab in rows], fontsize=10)
+    for i in range(len(rows)):
+        for j in range(len(ancs)):
+            if Mn[i, j] > 0.05:
+                ax.text(j, i, "●", ha="center", va="center",
+                        fontsize=7, color=("white" if Mn[i, j] > 0.6 else "#b03048"))
+    ax.set_title("Which SAE features fire, by game position",
+                 loc="left", fontsize=13, pad=10)
+    fig.tight_layout(); fig.savefig(OUT / "fig3_features_by_turn.png",
+                                    bbox_inches="tight")
+
 print("wrote:", *(p.name for p in sorted(OUT.glob("*.png"))))
