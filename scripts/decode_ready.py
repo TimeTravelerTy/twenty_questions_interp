@@ -7,8 +7,7 @@ Scans every layer's residual-stream activation captured at the Ready position:
 
 On self-chosen runs, reports decoder-vs-reveal agreement (where reveal parsed).
 
-Writes a layer x metric table to `docs/progress/M2-ready-smoke-test.md` and a
-per-run JSON summary under `runs/m2_report.json`.
+Writes a per-run JSON summary under `runs/m2_report.json`.
 """
 from __future__ import annotations
 

@@ -5,7 +5,7 @@ Checks:
   2. Each question splits the bank non-trivially (MIN_YES..MAX_YES inclusive;
      currently 1..19 — see comment on MIN_YES below).
   3. Every pair of candidates differs on at least MIN_PAIRWISE_DIFF questions
-     (currently 2 — see DECISIONS.md D-14).
+     (currently 2).
   4. Print a per-question entropy / yes-count report.
 
 Exits non-zero on any violation.
@@ -27,7 +27,7 @@ MAX_YES = 19
 # Pairwise-distinguishability floor. 3 would be preferable for robustness but
 # produces unsolvable constraints for (cow, horse) and (dog, cat) without
 # stuffing the question bank with indicator-style predicates. 2 is the
-# relaxation for M1; see DECISIONS.md D-14.
+# relaxation for M1.
 MIN_PAIRWISE_DIFF = 2
 
 

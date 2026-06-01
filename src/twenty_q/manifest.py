@@ -1,6 +1,5 @@
 """Structured run manifest. Every run writes one of these as JSON next to its
-activation files; comparing runs later depends on having this metadata
-(DECISIONS.md D-10).
+activation files; comparing runs later depends on having this metadata.
 """
 from __future__ import annotations
 

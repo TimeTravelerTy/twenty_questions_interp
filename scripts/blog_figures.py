@@ -1,6 +1,6 @@
 """Generate blog data figures from the M3/M5/M5b results.
 
-Values are transcribed from the progress writeups (STATUS.md tables):
+Values are transcribed from the experiment result tables:
 - decodability: per-anchor LR LOO peak, reported as x-chance multiples.
 - steering: flip-to-source rate by position (rollout CAA add).
 - SAE: dense vs sparse LR LOO at end_ready (6-class balanced, chance 0.167).

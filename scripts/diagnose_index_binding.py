@@ -1,4 +1,4 @@
-"""Run the M3 calibration-binding smoke described in STATUS.md.
+"""Run the M3 calibration-binding smoke.
 
 Six calibration conditions are defined; the default selection runs the three
 non-index variants used in the post-4cond follow-up:

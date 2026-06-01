@@ -1,6 +1,6 @@
 """H-persistence diagnostic for `verbalized_index` at 4B.
 
-Per STATUS.md / D-19, the hypothesis is that at 4B the instantiated-entity
+The hypothesis is that at 4B the instantiated-entity
 representation does not persist across the chat-turn boundary, even when name
 retrieval from the index succeeds. This script measures that directly.
 

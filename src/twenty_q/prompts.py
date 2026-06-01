@@ -1,9 +1,8 @@
 """Prompt templates for the calibration and self-chosen conditions.
 
-Calibration secrets are assigned by **1-based displayed index**, not by name
-(DECISIONS.md D-06) — this keeps calibration distributionally close to
-self-chosen and avoids building a decoder that keys on the literal surface
-token.
+Calibration secrets are assigned by **1-based displayed index**, not by name.
+This keeps calibration distributionally close to self-chosen and avoids building
+a decoder that keys on the literal surface token.
 
 Each template returns `(system, user)` strings. The caller is responsible for
 running the tokenizer's chat template over them.

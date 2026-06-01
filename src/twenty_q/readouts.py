@@ -1,6 +1,6 @@
 """Frozen readouts trained on calibration and applied to self-chosen (M2).
 
-Three decoder flavors per layer (DECISIONS.md D-11):
+Three decoder flavors per layer:
 
 1. **Nearest-centroid retrieval** — cheapest; robust to small N; preferred
    baseline per AxBench-style findings.

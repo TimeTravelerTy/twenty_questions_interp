@@ -111,7 +111,7 @@
   text: "Does it have a tail?"
   attribute: tail
   polarity: positive
-# Targeted distinguishers (see DECISIONS.md D-14). Low yes-counts are expected.
+# Targeted distinguishers. Low yes-counts are expected.
 - id: is_ridden_by_humans
   text: "Is it typically ridden by humans for sport or transport?"
   attribute: ridden

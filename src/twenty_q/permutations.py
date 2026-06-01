@@ -1,7 +1,7 @@
 """Randomize the displayed order of candidates per run; log the permutation.
 
 Without this, later decoders can entangle concept identity, displayed index,
-and positional biases in the model's hidden choice (DECISIONS.md D-07).
+and positional biases in the model's hidden choice.
 """
 from __future__ import annotations
 

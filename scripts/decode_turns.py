@@ -1,8 +1,8 @@
 """Decode self-chosen turn-position activations on kept diagnostic runs.
 
-This is the follow-through from STATUS.md / D-29: Ready-state direct-fit at
-12B is weak, so the next question is whether the chosen class becomes more
-decodable at pre-answer positions later in the dialogue.
+Ready-state direct-fit at 12B is weak, so the next question is whether the
+chosen class becomes more decodable at pre-answer positions later in the
+dialogue.
 
 For each requested turn index, this script loads the all-layer activation
 tensor captured immediately before that answer, then runs layerwise leave-one-

@@ -1,14 +1,14 @@
 """Run a single dialogue end-to-end with Ready-state and optional question turns.
 
 The base capture is still the M2 Ready-state activation at the token position
-immediately before `Ready` is generated (DECISIONS.md D-08). M3 extends this by
+immediately before `Ready` is generated. M3 extends this by
 optionally capturing all-layer pre-answer activations on later yes/no question
 turns, persisting them in the run directory, and recording parsed answers in
 the manifest.
 
 Uses `transformers` directly rather than NNsight. NNsight is overkill for pure
-activation capture; it will come in at M3+ when we start doing interventions
-(DECISIONS.md D-15). Swap out `capture_ready_state` when that happens.
+activation capture; it will come in at M3+ when we start doing interventions.
+Swap out `capture_ready_state` when that happens.
 """
 from __future__ import annotations
 

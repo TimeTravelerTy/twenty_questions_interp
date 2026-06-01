@@ -2,7 +2,7 @@
 
 The feasible-set `S_t = {c in C : A(c, q_i) = a_i for all i <= t}` is computed
 here from day 1 even though M2 has no questions yet; it is the central control
-for the scientific claim (see docs/PLAN.md section 4).
+for the scientific claim.
 """
 from __future__ import annotations
 

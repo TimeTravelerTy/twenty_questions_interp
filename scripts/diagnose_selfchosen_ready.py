@@ -1,6 +1,5 @@
 """Self-chosen Ready-state diagnostic for the M3 smoke bank.
 
-This is the direct follow-through from STATUS.md after D-21/H-rotation.
 By default it uses the same 4 candidates and primary question set used in the
 `verbalized_index` persistence diagnostic, but it can also run on the full
 20-animal bank via `--candidates all`.

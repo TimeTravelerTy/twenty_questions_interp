@@ -14,7 +14,7 @@ RUNS_DIR: Path = REPO_ROOT / "runs"
 CALIBRATION_RUNS_DIR: Path = RUNS_DIR / "calibration"
 SELFCHOSEN_RUNS_DIR: Path = RUNS_DIR / "selfchosen"
 
-# Model ladder (see DECISIONS.md D-05).
+# Model ladder.
 MODEL_DEBUG: str = "google/gemma-3-1b-it"
 MODEL_MAIN: str = "google/gemma-3-4b-it"
 MODEL_REPLICATE: str = "google/gemma-3-12b-it"
